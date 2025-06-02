@@ -15,6 +15,16 @@ from sklearn.metrics import mean_squared_error
 def rmse(y_true, y_pred):
     return mean_squared_error(y_true, y_pred, squared=False)
 
+def LL(res):
+    n = len(res)
+    return n*np.log(np.sum(res**2)/n)
+
+IC_DICT = {
+    'AIC': lambda res, k: LL(res) + 2*k,
+    'BIC': lambda res, k: LL(res) + np.log(len(res))*k,
+    'AICc': lambda res, k: LL(res) + 2*k + 2*k*(k+1)/(len(res)-k-1)
+}
+
 class PolynomialFeaturesICL:
     def __init__(self, rung, include_bias=False):
         self.rung = rung
@@ -195,8 +205,6 @@ class ThresholdedLeastSquares:
         if verbose: print(idx, beta_tls)
         return beta
 
-
-
 class SIS:
     def __init__(self, n_sis):
         self.n_sis = n_sis
@@ -241,7 +249,7 @@ class SIS:
         return best_corr, best_idxs
 
 class ICL:
-    def __init__(self, s, so, d, fit_intercept=True, normalize=True, pool_reset=False): #, track_intermediates=False):
+    def __init__(self, s, so, d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=None): #, track_intermediates=False):
         self.s = s
         self.sis = SIS(n_sis=s)
         self.so = so
@@ -249,6 +257,7 @@ class ICL:
         self.fit_intercept = fit_intercept
         self.normalize=normalize
         self.pool_reset = pool_reset
+        self.information_criteria = information_criteria if information_criteria in IC_DICT.keys() else None
         # self.track_intermediates = track_intermediates
     
     def get_params(self, deep=False):
@@ -257,7 +266,8 @@ class ICL:
                 'd': self.d,
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
-                'pool_reset': self.pool_reset
+                'pool_reset': self.pool_reset,
+                'stopping': self.stopping
                 }
 
     def __str__(self):
@@ -313,11 +323,15 @@ class ICL:
 
     def fitting(self, X, y, feature_names=None, verbose=False, track_pool=False):
         self.feature_names_ = feature_names
+        n,p = X.shape
 
         pool_ = set()
         if track_pool: self.pool = []
         res = y
-        for i in range(self.d):
+        i = 0
+        IC = np.infty
+        cont = True
+        while i < self.d and cont:
             self.intercept_ = np.mean(res).squeeze()
             if verbose: print('.', end='')
 
@@ -340,6 +354,12 @@ class ICL:
                 pool_ = set(pool_lst)
 
             res = (y.reshape(1, -1) - (np.dot(X, beta).reshape(1, -1)+self.intercept_) ).T
+            if not(self.information_criteria is None):
+                IC_old = IC
+                IC = IC_DICT[self.information_criteria](res=res, k=i+1)
+                cont = IC < IC_old
+
+            i += 1
             
         if verbose: print()
         
@@ -349,7 +369,6 @@ class ICL:
         self.beta_idx_ = list(np.nonzero(self.beta_)[0])
         self.beta_sparse_ = self.beta_[self.beta_idx_]
         self.feature_names_sparse_ = np.array(self.feature_names_)[self.beta_idx_]
-
 
         return self
 
@@ -390,6 +409,47 @@ class ICL:
         return scorer(self.predict(X), y)
 
 if __name__ == "__main__":
-    pass
+    random_state = 0
+    n = 100
+    p = 10
+    rung = 3
+    s = 5
+    d = 4
+
+    np.random.seed(random_state)
+    X_train = np.random.normal(size=(n, p))
+
+    y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
+
+    y_train = y(X_train)
+
+    # Initialise and fit the ICL model
+    FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
+    so = AdaptiveLASSO(gamma=1, fit_intercept=False)
+    information_criteria='AICc'
+
+    X_train_transformed = FE.fit_transform(X_train, y)
+    feature_names = FE.get_feature_names_out()
+
+    icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
+    icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True)
+
+    # Compute the train and test error and print the model to verify that we have reproduced the data generating function
+    print(icl)
+    print(icl.__repr__())
+
+    y_hat_train = icl.predict(X_train_transformed)
+
+    print("Train rmse: " + str(rmse(y_hat_train, y_train)))
+
+    X_test = np.random.normal(size=(100*n, p))
+    X_test_transformed = FE.transform(X_test)
+    y_test = y(X_test)
+    y_hat_test = icl.predict(X_test_transformed)
+    print("Test rmse: " + str(rmse(y_hat_test, y_test)))
+    print("k={0}".format(len(icl.coef_[0])))
+
+
+
 
 
