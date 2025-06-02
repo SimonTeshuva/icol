@@ -21,7 +21,9 @@ def LL(res):
 
 IC_DICT = {
     'AIC': lambda res, k: LL(res) + 2*k,
-    'BIC': lambda res, k: LL(res) + np.log(len(res))*k,
+    'HQIC': lambda res, k: LL(res) + np.log(np.log(len(res)))*k,
+    'AIC': lambda res, k: LL(res) + 2*k,
+    'CAIC': lambda res, k: LL(res) + (np.log(len(res))+1)*k,
     'AICc': lambda res, k: LL(res) + 2*k + 2*k*(k+1)/(len(res)-k-1)
 }
 
@@ -357,6 +359,7 @@ class ICL:
             if not(self.information_criteria is None):
                 IC_old = IC
                 IC = IC_DICT[self.information_criteria](res=res, k=i+1)
+                if verbose: print('{0}={1}'.format(self.information_criteria, IC))
                 cont = IC < IC_old
 
             i += 1
@@ -426,7 +429,7 @@ if __name__ == "__main__":
     # Initialise and fit the ICL model
     FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
     so = AdaptiveLASSO(gamma=1, fit_intercept=False)
-    information_criteria='AICc'
+    information_criteria='BIC'
 
     X_train_transformed = FE.fit_transform(X_train, y)
     feature_names = FE.get_feature_names_out()
