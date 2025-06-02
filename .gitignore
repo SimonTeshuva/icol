@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Virtual environment
+.venv/
+venv/
+
+# PyInstaller
+*.spec
+
+# VS Code, PyCharm
+.vscode/
+.idea/
+
+# macOS, Linux, Windows junk
+.DS_Store
+*.swp
+Thumbs.db
