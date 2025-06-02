@@ -1,16 +1,20 @@
-# [project]
-name = "ICL"
-version = "0.1.0"
-description = "A minimial implementation of Iterative Correlation Learning"
-authors = ["Simon Teshuva <Simon.Teshuva@Monash.edu>"]
+[project]
+name = "icol"
+version = "0.1.2"
+description = "Iterative Correlation Learning implementation"
+authors = [
+  { name = "Simon Teshuva", email = "simon.teshuva@gmail.com" }
+]
 requires-python = ">=3.8"
 license = { text = "MIT" }
+readme = "README.md"
 
 dependencies = [
     "numpy>=1.24.3",
     "scikit-learn>=1.2.2"
 ]
 
-# [build-system]
+[build-system]
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
+
