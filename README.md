@@ -13,6 +13,10 @@ Install via pip:
 pip3 install icol
 ```
 
+
+## Example
+```python
+
 import numpy as np
 
 from icol.icol import PolynomialFeaturesICL, AdaptiveLASSO, ICL, rmse
@@ -55,3 +59,5 @@ X_test_transformed = FE.transform(X_test)
 y_test = y(X_test)
 y_hat_test = icl.predict(X_test_transformed)
 print("Test rmse: " + str(rmse(y_hat_test, y_test)))
+
+```
