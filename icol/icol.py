@@ -451,8 +451,3 @@ if __name__ == "__main__":
     y_hat_test = icl.predict(X_test_transformed)
     print("Test rmse: " + str(rmse(y_hat_test, y_test)))
     print("k={0}".format(len(icl.coef_[0])))
-
-
-
-
-
