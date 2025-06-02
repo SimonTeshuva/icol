@@ -10,9 +10,10 @@ import numpy as np
 from sklearn.linear_model import lars_path
 from sklearn.preprocessing import PolynomialFeatures
 
+from sklearn.metrics import mean_squared_error
 
-def rmse(y, y_hat):
-    return np.sqrt(np.sum(np.power(y - y_hat, 2))/len(y))
+def rmse(y_true, y_pred):
+    return mean_squared_error(y_true, y_pred, squared=False)
 
 class PolynomialFeaturesICL:
     def __init__(self, rung, include_bias=False):
@@ -104,7 +105,7 @@ class BSS:
         return beta_ret
                     
 class AdaptiveLASSO:
-    def __init__(self, gamma=1, fit_intercept=True, default_d=5, rcond=-1):
+    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1):
         self.gamma = gamma
         self.fit_intercept = fit_intercept
         self.default_d = default_d
@@ -239,7 +240,7 @@ class SIS:
 
         return best_corr, best_idxs
 
-class SISSO:
+class ICL:
     def __init__(self, s, so, d, fit_intercept=True, normalize=True, pool_reset=False): #, track_intermediates=False):
         self.s = s
         self.sis = SIS(n_sis=s)
@@ -262,8 +263,14 @@ class SISSO:
     def __str__(self):
         return 'SISSO(n_sis={0}, SO={1}, d={2})'.format(self.s, str(self.so), self.d)
 
-    def __repr__(self):
-        return '+'.join(['{0}({1})'.format(str(np.round(b, 3)), self.feature_names_sparse_[i]) for i, b in enumerate(self.coef_) if np.abs(b) > 0]+[str(self.intercept_)])
+    def __repr__(self, prec=3):
+        ret = []
+        for i, name in enumerate(self.feature_names_sparse_):
+            ret += [('+' if self.coef_[0, i] > 0 else '') + str(np.round(self.coef_[0, i], prec)) + name]
+        ret += [str(float(np.round(self.intercept_, prec)))]
+        return ''.join(ret)
+    
+        # return '+'.join(['{0}({1})'.format(str(np.round(b, 3)), self.feature_names_sparse_[i]) for i, b in enumerate(self.coef_) if np.abs(b) > 0]+[str(self.intercept_)])
      
     def solve_norm_coef(self, X, y):
         n, p = X.shape
