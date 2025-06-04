@@ -323,12 +323,13 @@ class ICL:
 
         return bad_cols
 
-    def fitting(self, X, y, feature_names=None, verbose=False, track_pool=False):
+    def fitting(self, X, y, feature_names=None, verbose=False, track_pool=False, track_intermediates=False):
         self.feature_names_ = feature_names
         n,p = X.shape
 
         pool_ = set()
         if track_pool: self.pool = []
+        if track_intermediates: self.intermediates = np.empty(shape=(self.d, 5), dtype=object)
         res = y
         i = 0
         IC = np.infty
@@ -347,6 +348,23 @@ class ICL:
             beta = np.zeros(shape=(X.shape[1]))
             beta[pool_lst] = beta_i
 
+            if track_intermediates:
+                idx = np.nonzero(beta)[0]
+                if self.normalize:
+                    coef = (beta[idx].reshape(1, -1)*self.b_y/self.b_x[idx].reshape(1, -1))
+                    intercept_ = self.a_y - coef.dot(self.a_x[idx])
+                else:
+                    coef = beta[idx]
+                    intercept_ = self.intercept_
+                coef = coef[0]
+                expr = ''.join([('+' if float(c) >= 0 else '') + str(np.round(float(c), 3)) + self.feature_names_[idx][q] for q, c in enumerate(coef)])
+                if verbose: print('Model after {0} iterations: {1}'.format(i, expr))
+
+                self.intermediates[i, 0] = deepcopy(idx)
+                self.intermediates[i, 1] = coef # deepcopy(beta[idx])
+                self.intermediates[i, 2] = intercept_
+                self.intermediates[i, 3] = self.feature_names_[idx]
+                self.intermediates[i, 4] = expr
 
             if self.pool_reset:
                 idx = np.abs(beta_i) > 0 
@@ -363,6 +381,7 @@ class ICL:
                 cont = IC < IC_old
 
             i += 1
+        self.intermediates = self.intermediates[:, :i]
             
         if verbose: print()
         
@@ -375,7 +394,7 @@ class ICL:
 
         return self
 
-    def fit(self, X, y, feature_names=None, timer=False, verbose=False, track_pool=False):
+    def fit(self, X, y, feature_names=None, timer=False, verbose=False, track_pool=False, track_intermediates=False):
         if verbose: print('removing invalid features')
         self.bad_col = self.filter_invalid_cols(X)
         X_ = np.delete(X, self.bad_col, axis=1)
@@ -388,7 +407,7 @@ class ICL:
 
         if verbose: print('Fitting SISSO model')
         if timer: start=time()
-        self.fitting(X=X_, y=y_, feature_names=feature_names_, verbose=verbose, track_pool = track_pool)
+        self.fitting(X=X_, y=y_, feature_names=feature_names_, verbose=verbose, track_pool = track_pool, track_intermediates=track_intermediates)
         if timer: self.fit_time=time()-start
         if timer and verbose: print(self.fit_time)
 
@@ -435,7 +454,7 @@ if __name__ == "__main__":
     feature_names = FE.get_feature_names_out()
 
     icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
-    icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True)
+    icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
 
     # Compute the train and test error and print the model to verify that we have reproduced the data generating function
     print(icl)
@@ -451,3 +470,5 @@ if __name__ == "__main__":
     y_hat_test = icl.predict(X_test_transformed)
     print("Test rmse: " + str(rmse(y_hat_test, y_test)))
     print("k={0}".format(len(icl.coef_[0])))
+
+    # print(icl.intermediates)
