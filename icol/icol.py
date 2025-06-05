@@ -3,9 +3,10 @@ warnings.filterwarnings('ignore')
 
 from time import time
 from copy import deepcopy
-from itertools import combinations
+from itertools import combinations, permutations
 
 import numpy as np
+import sympy as sp
 
 from sklearn.linear_model import lars_path
 from sklearn.preprocessing import PolynomialFeatures
@@ -27,6 +28,92 @@ IC_DICT = {
     'AICc': lambda res, k: LL(res) + 2*k + 2*k*(k+1)/(len(res)-k-1)
 }
 
+OP_DICT = {
+    '*': {
+        'op': sp.Mul,
+        'op_np': np.multiply,
+        'inputs': 2,
+        'commutative': True,
+        'cares_units': False
+        },
+    'sin': {
+        'op': sp.sin,
+        'op_np': np.sin,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'cos': {
+        'op': sp.cos,
+        'op_np': np.cos,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'log': {
+        'op': sp.log,
+        'op_np': np.log,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'exp': {
+        'op': sp.exp,
+        'op_np': np.exp,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'abs': {
+        'op': sp.Abs,
+        'op_np': np.abs,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'sqrt': {
+        'op': sp.sqrt,
+        'op_np': np.sqrt,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    # 'square': {
+    #     'op': sp.Square,
+    #     'op_np': np.square,
+    #     'inputs': 1,
+    #     'commutative': True,
+    #     'cares_units': False
+    #     },
+    # 'cube': {
+    #     'op': sp.cube,
+    #     'op_np': np.cube,
+    #     'inputs': 1,
+    #     'commutative': True,
+    #     'cares_units': False
+    #     },
+    # 'inv': {
+    #     'op': sp.inv,
+    #     'op_np': np.inv,
+    #     'inputs': 1,
+    #     'commutative': True,
+    #     'cares_units': False
+    #     },
+    'mul': {
+        'op': sp.Mul,
+        'op_np': np.multiply,
+        'inputs': 2,
+        'commutative': True,
+        'cares_units': False
+        },
+    'add': {
+        'op': sp.Add,
+        'op_np': lambda x, y: x+y,
+        'inputs': 2,
+        'commutative': True,
+        'cares_units': False
+        },
+    }
 class PolynomialFeaturesICL:
     def __init__(self, rung, include_bias=False):
         self.rung = rung
@@ -269,7 +356,7 @@ class ICL:
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
-                'stopping': self.stopping
+                'information_criteria': self.information_criteria
                 }
 
     def __str__(self):
@@ -430,45 +517,126 @@ class ICL:
     def score(self, X, y, scorer=rmse):
         return scorer(self.predict(X), y)
 
+class FeatureExpansion:
+    def __init__(self, ops, rung):
+        self.ops = ops
+        self.rung = rung
+
+    def __call__(self, X, feature_names=None):
+        if feature_names is None: feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
+        spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, prev_start = 0)
+        sorted_idxs = np.argsort(names)
+        for i, idx in enumerate(sorted_idxs):
+            if i == 0:
+                unique = [idx]
+            elif names[idx] != names[sorted_idxs[i-1]]:
+                unique += [idx]
+        unique_original_order = np.sort(unique)
+        return spnames[unique_original_order], names[unique_original_order], X_[:, unique_original_order]
+        
+
+    def FE_aux(self, X, feature_names, prev_start, rung=0):
+        if rung <= 0:
+            return np.array(feature_names), np.array([str(sp.simplify(name)) for name in feature_names]), X
+        else:
+            new_names = ()
+            for op_key in self.ops:
+                if OP_DICT[op_key]['inputs'] == 1:
+                    for i in range(prev_start, len(feature_names)):
+                        if len(new_names) == 0:
+                            new_X = OP_DICT[op_key]['op_np'](X[:, i]).reshape(X.shape[0], 1)
+                        else:
+                            new_X = np.hstack([new_X, OP_DICT[op_key]['op_np'](X[:, i]).reshape(X.shape[0], 1)])
+                        new_names += (OP_DICT[op_key]['op'](feature_names[i]), )
+                elif OP_DICT[op_key]['inputs'] == 2:
+                    pairings = combinations if OP_DICT[op_key]['commutative'] else permutations
+                    for idx1, idx2 in pairings(range(len(feature_names)), 2): 
+                        # make sure at least one of the features if from the new features
+                        if idx1 >= prev_start or idx2 >= prev_start: 
+                            new_col = OP_DICT[op_key]['op_np'](X[:, idx1], X[:, idx2]).reshape(X.shape[0], 1).reshape(X.shape[0], 1)
+                            new_X = new_col if len(new_names) == 0 else np.hstack([new_X,new_col])
+                            new_name = OP_DICT[op_key]['op'](feature_names[idx1],feature_names[idx2])
+                            new_names += (new_name, )
+
+            if new_names == ():
+                return self.FE_aux(X = X, feature_names=feature_names, rung=rung-1, prev_start=len(feature_names))
+            else:
+                return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names))
+
+# does a rung 2 expansion apply the rung 0 terms to the rung 1 terms? i.e, if you have a variable x, operator '*', does a rung 2 expansion give [x, x**2, x**4], or [x, x**2, x**3, x**4]
+# don't want to apply unary operators to previous rung            
+
 if __name__ == "__main__":
-    random_state = 0
-    n = 100
-    p = 10
-    rung = 3
-    s = 5
-    d = 4
+    test = 'fe'
 
-    np.random.seed(random_state)
-    X_train = np.random.normal(size=(n, p))
+    if test == 'fe':
+        ops = ['sin', 'cos', 'exp', 'log', 'abs', 'sqrt']
+        ops = ['add', 'mul']
+        rung = 2
+        X = np.array([
+            [1, 2, 3, 4],
+            [1, 3, 5, 7],
+            [1, 4, 7, 10],
+            [1, 5, 9, 13],
+            [1, 6, 11, 16]
+        ])
+        X = np.array([
+            [1, 2, 3],
+            [1, 3, 5],
+            [1, 4, 7],
+            [1, 5, 9],
+            [1, 6, 11]
+        ])
 
-    y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
+        fe = FeatureExpansion(ops=ops, rung=rung)
+        names, str_names, X_ = fe(X=X)
+        for name in names:
+            print(name)
+        print(len(names))
 
-    y_train = y(X_train)
 
-    # Initialise and fit the ICL model
-    FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
-    so = AdaptiveLASSO(gamma=1, fit_intercept=False)
-    information_criteria='BIC'
 
-    X_train_transformed = FE.fit_transform(X_train, y)
-    feature_names = FE.get_feature_names_out()
 
-    icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
-    icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
+    
+    if test == 'icl':
+        random_state = 0
+        n = 100
+        p = 10
+        rung = 3
+        s = 5
+        d = 4
 
-    # Compute the train and test error and print the model to verify that we have reproduced the data generating function
-    print(icl)
-    print(icl.__repr__())
+        np.random.seed(random_state)
+        X_train = np.random.normal(size=(n, p))
 
-    y_hat_train = icl.predict(X_train_transformed)
+        y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
 
-    print("Train rmse: " + str(rmse(y_hat_train, y_train)))
+        y_train = y(X_train)
 
-    X_test = np.random.normal(size=(100*n, p))
-    X_test_transformed = FE.transform(X_test)
-    y_test = y(X_test)
-    y_hat_test = icl.predict(X_test_transformed)
-    print("Test rmse: " + str(rmse(y_hat_test, y_test)))
-    print("k={0}".format(len(icl.coef_[0])))
+        # Initialise and fit the ICL model
+        FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
+        so = AdaptiveLASSO(gamma=1, fit_intercept=False)
+        information_criteria='BIC'
 
-    # print(icl.intermediates)
+        X_train_transformed = FE.fit_transform(X_train, y)
+        feature_names = FE.get_feature_names_out()
+
+        icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
+        icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
+
+        # Compute the train and test error and print the model to verify that we have reproduced the data generating function
+        print(icl)
+        print(icl.__repr__())
+
+        y_hat_train = icl.predict(X_train_transformed)
+
+        print("Train rmse: " + str(rmse(y_hat_train, y_train)))
+
+        X_test = np.random.normal(size=(100*n, p))
+        X_test_transformed = FE.transform(X_test)
+        y_test = y(X_test)
+        y_hat_test = icl.predict(X_test_transformed)
+        print("Test rmse: " + str(rmse(y_hat_test, y_test)))
+        print("k={0}".format(len(icl.coef_[0])))
+
+        # print(icl.intermediates)
