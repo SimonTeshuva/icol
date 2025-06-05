@@ -29,13 +29,6 @@ IC_DICT = {
 }
 
 OP_DICT = {
-    '*': {
-        'op': sp.Mul,
-        'op_np': np.multiply,
-        'inputs': 2,
-        'commutative': True,
-        'cares_units': False
-        },
     'sin': {
         'op': sp.sin,
         'op_np': np.sin,
@@ -78,32 +71,53 @@ OP_DICT = {
         'commutative': True,
         'cares_units': False
         },
-    # 'square': {
-    #     'op': sp.Square,
-    #     'op_np': np.square,
-    #     'inputs': 1,
-    #     'commutative': True,
-    #     'cares_units': False
-    #     },
-    # 'cube': {
-    #     'op': sp.cube,
-    #     'op_np': np.cube,
-    #     'inputs': 1,
-    #     'commutative': True,
-    #     'cares_units': False
-    #     },
-    # 'inv': {
-    #     'op': sp.inv,
-    #     'op_np': np.inv,
-    #     'inputs': 1,
-    #     'commutative': True,
-    #     'cares_units': False
-    #     },
+    'cbrt': {
+        'op': lambda x: sp.Pow(x, sp.Rational(1, 3)),
+        'op_np': lambda x: np.power(x, 1/3),
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'sq': {
+        'op': lambda x: sp.Pow(x, 2),
+        'op_np': lambda x: np.power(x, 2),
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'cb': {
+        'op': lambda x: sp.Pow(x, 3),
+        'op_np': lambda x: np.power(x, 3),
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'six_pow': {
+        'op': lambda x: sp.Pow(x, 6),
+        'op_np': lambda x: np.power(x, 6),
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
+    'inv': {
+        'op': lambda x: 1/x,
+        'op_np': lambda x: 1/x,
+        'inputs': 1,
+        'commutative': True,
+        'cares_units': False
+        },
     'mul': {
         'op': sp.Mul,
         'op_np': np.multiply,
         'inputs': 2,
         'commutative': True,
+        'cares_units': False
+        },
+    'div': {
+        'op': lambda x, y: sp.Mul(x, 1/y),
+        'op_np': lambda x, y: np.multiply(x, 1/y),
+        'inputs': 2,
+        'commutative': False,
         'cares_units': False
         },
     'add': {
@@ -113,7 +127,22 @@ OP_DICT = {
         'commutative': True,
         'cares_units': False
         },
+    'sub': {
+        'op': lambda x, y: sp.Add(x, -y),
+        'op_np': lambda x, y: x-y,
+        'inputs': 2,
+        'commutative': False,
+        'cares_units': False
+        },
+    'abs_diff': {
+        'op': lambda x, y: sp.Abs(sp.Add(x, -y)),
+        'op_np': lambda x, y: np.abs(x-y),
+        'inputs': 2,
+        'commutative': True,
+        'cares_units': False
+        },
     }
+
 class PolynomialFeaturesICL:
     def __init__(self, rung, include_bias=False):
         self.rung = rung
@@ -522,7 +551,8 @@ class FeatureExpansion:
         self.ops = ops
         self.rung = rung
 
-    def __call__(self, X, feature_names=None):
+    def __call__(self, X, feature_names=None, verbose=False):
+        if verbose: print('Prepping Symbols')
         if feature_names is None: feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
         spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, prev_start = 0)
         sorted_idxs = np.argsort(names)
@@ -536,8 +566,30 @@ class FeatureExpansion:
         
 
     def FE_aux(self, X, feature_names, prev_start, rung=0):
+        def simplify_nested_powers(expr):
+            # Replace (x**n)**(1/n) with x
+            def flatten_pow_chain(e):
+                if isinstance(e, sp.Pow) and isinstance(e.base, sp.Pow):
+                    base, inner_exp = e.base.args
+                    outer_exp = e.exp
+                    combined_exp = inner_exp * outer_exp
+                    if sp.simplify(combined_exp) == 1:
+                        return base
+                    return sp.Pow(base, combined_exp)
+                elif isinstance(e, sp.Pow) and sp.simplify(e.exp) == 1:
+                    return e.base
+                return e
+            # Apply recursively
+            return expr.replace(
+                lambda e: isinstance(e, sp.Pow),
+                flatten_pow_chain
+            )
+        
         if rung <= 0:
-            return np.array(feature_names), np.array([str(sp.simplify(name)) for name in feature_names]), X
+            return (np.array(feature_names), 
+                    np.array(
+                        [str(sp.simplify(simplify_nested_powers(name)))for name in feature_names]), 
+                    X)
         else:
             new_names = ()
             for op_key in self.ops:
@@ -563,16 +615,15 @@ class FeatureExpansion:
             else:
                 return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names))
 
-# does a rung 2 expansion apply the rung 0 terms to the rung 1 terms? i.e, if you have a variable x, operator '*', does a rung 2 expansion give [x, x**2, x**4], or [x, x**2, x**3, x**4]
-# don't want to apply unary operators to previous rung            
-
 if __name__ == "__main__":
     test = 'fe'
 
     if test == 'fe':
-        ops = ['sin', 'cos', 'exp', 'log', 'abs', 'sqrt']
-        ops = ['add', 'mul']
-        rung = 2
+        unary = ['sin', 'cos', 'exp', 'log', 'inv', 'abs', 'sqrt', 'sq', 'cbrt', 'cb', 'six_pow']
+        binary = ['add', 'mul', 'sub', 'div', 'abs_diff']
+        ops = unary + binary
+        
+        rung = 1
         X = np.array([
             [1, 2, 3, 4],
             [1, 3, 5, 7],
@@ -590,13 +641,9 @@ if __name__ == "__main__":
 
         fe = FeatureExpansion(ops=ops, rung=rung)
         names, str_names, X_ = fe(X=X)
-        for name in names:
+        for name in str_names:
             print(name)
         print(len(names))
-
-
-
-
     
     if test == 'icl':
         random_state = 0
