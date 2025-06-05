@@ -547,14 +547,18 @@ class ICL:
         return scorer(self.predict(X), y)
 
 class FeatureExpansion:
-    def __init__(self, ops, rung):
+    def __init__(self, ops, rung, printrate=1000):
         self.ops = ops
         self.rung = rung
+        self.printrate = printrate
 
-    def __call__(self, X, feature_names=None, verbose=False):
+    def __call__(self, X, feature_names=None, verbose=False, f=None):
         if verbose: print('Prepping Symbols')
         if feature_names is None: feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
-        spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, prev_start = 0)
+        if verbose: print('Performing Feature Expansion')
+        if verbose: print('Estimating the creation of {0} features with duplicates'.format(self.extimate_workload(X=X, max_rung=self.rung)))
+        spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, max_rung=self.rung, prev_start = -1, verbose=verbose)
+        if verbose: print('Created {0} features, now removing duplicate features'.format(X_.shape[1]))
         sorted_idxs = np.argsort(names)
         for i, idx in enumerate(sorted_idxs):
             if i == 0:
@@ -562,10 +566,30 @@ class FeatureExpansion:
             elif names[idx] != names[sorted_idxs[i-1]]:
                 unique += [idx]
         unique_original_order = np.sort(unique)
+        if f:
+            pass
         return spnames[unique_original_order], names[unique_original_order], X_[:, unique_original_order]
         
+    def extimate_workload(self, X, max_rung):
+        rung = max_rung
+        p = X.shape[1]
+        p_prev = X.shape[1]
+        unary = 0
+        binary = 0
+        for op in self.ops:
+            if OP_DICT[op]['inputs'] == 1:
+                unary += 1
+            elif OP_DICT[op]['inputs'] == 2:
+                binary += 1
+        while rung > 0:
+            new_unary = unary*(p-p_prev) if rung != max_rung else unary*p
+            new_binary = int(binary*(p-p_prev)*(p-1)) if rung != max_rung else int(binary*p*(p-1)/2)
+            p_prev = p
+            p = p + new_unary + new_binary
+            rung -= 1
+        return p
 
-    def FE_aux(self, X, feature_names, prev_start, rung=0):
+    def FE_aux(self, X, feature_names, prev_start, rung=0, max_rung=0, verbose=False):
         def simplify_nested_powers(expr):
             # Replace (x**n)**(1/n) with x
             def flatten_pow_chain(e):
@@ -591,29 +615,34 @@ class FeatureExpansion:
                         [str(sp.simplify(simplify_nested_powers(name)))for name in feature_names]), 
                     X)
         else:
+            if verbose: print('Creating rung {0} features'.format(max_rung - rung+1)) 
             new_names = ()
             for op_key in self.ops:
                 if OP_DICT[op_key]['inputs'] == 1:
                     for i in range(prev_start, len(feature_names)):
+                        if verbose and ((len(feature_names) + len(new_names)) % self.printrate == 0): print('Created {0} Features'.format(len(feature_names) + len(new_names)))
                         if len(new_names) == 0:
                             new_X = OP_DICT[op_key]['op_np'](X[:, i]).reshape(X.shape[0], 1)
                         else:
                             new_X = np.hstack([new_X, OP_DICT[op_key]['op_np'](X[:, i]).reshape(X.shape[0], 1)])
                         new_names += (OP_DICT[op_key]['op'](feature_names[i]), )
+                        if verbose>1: print(new_names[-1])
                 elif OP_DICT[op_key]['inputs'] == 2:
                     pairings = combinations if OP_DICT[op_key]['commutative'] else permutations
                     for idx1, idx2 in pairings(range(len(feature_names)), 2): 
+                        if verbose and ((len(feature_names) + len(new_names)) % self.printrate == 0): print('Created {0} Features'.format(len(feature_names) + len(new_names)))
                         # make sure at least one of the features if from the new features
                         if idx1 >= prev_start or idx2 >= prev_start: 
                             new_col = OP_DICT[op_key]['op_np'](X[:, idx1], X[:, idx2]).reshape(X.shape[0], 1).reshape(X.shape[0], 1)
                             new_X = new_col if len(new_names) == 0 else np.hstack([new_X,new_col])
                             new_name = OP_DICT[op_key]['op'](feature_names[idx1],feature_names[idx2])
                             new_names += (new_name, )
+                            if verbose > 1: print(new_name)
 
             if new_names == ():
-                return self.FE_aux(X = X, feature_names=feature_names, rung=rung-1, prev_start=len(feature_names))
+                return self.FE_aux(X = X, feature_names=feature_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
             else:
-                return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names))
+                return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
 
 if __name__ == "__main__":
     test = 'fe'
@@ -622,28 +651,19 @@ if __name__ == "__main__":
         unary = ['sin', 'cos', 'exp', 'log', 'inv', 'abs', 'sqrt', 'sq', 'cbrt', 'cb', 'six_pow']
         binary = ['add', 'mul', 'sub', 'div', 'abs_diff']
         ops = unary + binary
-        
-        rung = 1
-        X = np.array([
-            [1, 2, 3, 4],
-            [1, 3, 5, 7],
-            [1, 4, 7, 10],
-            [1, 5, 9, 13],
-            [1, 6, 11, 16]
-        ])
-        X = np.array([
-            [1, 2, 3],
-            [1, 3, 5],
-            [1, 4, 7],
-            [1, 5, 9],
-            [1, 6, 11]
-        ])
+        ops = unary + ['mul']
+        rung = 2
+        X = np.random.random(size=(100, 5))
 
-        fe = FeatureExpansion(ops=ops, rung=rung)
-        names, str_names, X_ = fe(X=X)
-        for name in str_names:
-            print(name)
-        print(len(names))
+        fe = FeatureExpansion(ops=ops, rung=rung, printrate=1000)
+        start = time()
+        names, str_names, X_ = fe(X=X, verbose=1)
+        fit_time = time() - start
+
+        print('created {0} features in {1} seconds'.format(X_.shape[1], str(np.round(fit_time, 2))))
+        # for name in str_names:
+        #     print(name)
+        # print(len(names))
     
     if test == 'icl':
         random_state = 0
