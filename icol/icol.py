@@ -10,6 +10,7 @@ import sympy as sp
 
 from sklearn.linear_model import lars_path
 from sklearn.preprocessing import PolynomialFeatures
+from sklearn.base import clone
 
 from sklearn.metrics import mean_squared_error
 
@@ -497,7 +498,7 @@ class ICL:
                 cont = IC < IC_old
 
             i += 1
-        self.intermediates = self.intermediates[:, :i]
+        if track_intermediates: self.intermediates = self.intermediates[:, :i]
             
         if verbose: print()
         
@@ -546,6 +547,85 @@ class ICL:
     def score(self, X, y, scorer=rmse):
         return scorer(self.predict(X), y)
 
+class BOOTSTRAP:
+    def __init__(self, X, y=None, random_state=None):
+        self.X = X
+        self.y = y
+        self.random_state = random_state
+        np.random.seed(random_state)
+
+    def sample(self, n, ret_idx=False):
+        in_idx = np.random.randint(low=0, high=self.X.shape[0], size=n)
+        out_idx = list(set(range(X.shape[0])) - set(in_idx))
+        if ret_idx:
+            return in_idx, out_idx
+        else:
+            return self.X[in_idx], self.X[out_idx], self.y[in_idx], self.y[out_idx]
+
+class ICL_ensemble:
+    def __init__(self, n_estimators, s, so, d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=None, random_state = None): #, track_intermediates=False):
+        self.n_estimators = n_estimators
+        self.s = s
+        self.sis = SIS(n_sis=s)
+        self.so = so
+        self.d = d
+        self.fit_intercept = fit_intercept
+        self.normalize=normalize
+        self.pool_reset = pool_reset
+        self.information_criteria = information_criteria if information_criteria in IC_DICT.keys() else None
+        self.random_state = random_state
+        self.base = ICL(s=s, so=so, d=d,
+                         fit_intercept=fit_intercept, normalize=normalize,
+                           pool_reset=pool_reset, information_criteria=information_criteria)
+    
+    def get_params(self, deep=False):
+        return {
+                'n_estimators': self.n_estimators,
+                's': self.s,
+                'so': self.so,
+                'd': self.d,
+                'fit_intercept': self.fit_intercept,
+                'normalize': self.normalize,
+                'pool_reset': self.pool_reset,
+                'information_criteria': self.information_criteria,
+                'random_state': self.random_state
+        }
+    
+    def __str__(self):
+        return 'ICL(s={0}, so={1}, d={2}, fit_intercept={3}, normalize={4}, pool_reset={5}, information_criteria={6}, random_state={7})'.format(self.s, self.so, self.d, self.fit_intercept, self.normalize, self.pool_reset, self.information_criteria, self.random_state)
+
+    def __repr__(self):
+        return '\n'.join([self.ensemble_[i].__repr__() for i in range(self.n_estimators)])
+               
+    def fit(self, X, y, feature_names=None, verbose=False):
+        sampler = BOOTSTRAP(X=X, y=y, random_state=self.random_state)
+        self.ensemble_ = np.empty(shape=self.n_estimators, dtype=object)
+        for i in range(self.n_estimators):
+            if verbose: print('fitting model {0}'.format(i+1))
+            X_train, X_test, y_train, y_test = sampler.sample(n=len(X))
+            self.ensemble_[i] = clone(self.base)
+            self.ensemble_[i].fit(X=X_train, y=y_train, feature_names=feature_names, verbose=verbose)
+
+    def get_rvs(self, X):
+        rvs = np.empty(shape=(X.shape[0], self.n_estimators))
+        for i in range(self.n_estimators):
+            rvs[:, i] = self.ensemble_[i].predict(X).squeeze()
+        return rvs
+    
+    def mean(self, X):
+        return self.get_rvs(X=X).mean(axis=1)
+
+    def std(self, X):
+        return self.get_rvs(X=X).std(axis=1)
+
+    def predict(self, X, std=False):
+        rvs = self.get_rvs(X=X)
+        if std:
+            return rvs.mean(axis=1), rvs.std(axis=1)
+        else:
+            return rvs.mean(axis=1)
+
+
 class FeatureExpansion:
     def __init__(self, ops, rung, printrate=1000):
         self.ops = ops
@@ -559,6 +639,12 @@ class FeatureExpansion:
         if verbose: print('Estimating the creation of {0} features with duplicates'.format(self.extimate_workload(X=X, max_rung=self.rung)))
         spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, max_rung=self.rung, prev_start = -1, verbose=verbose)
         if verbose: print('Created {0} features, now removing duplicate features'.format(X_.shape[1]))
+        spnames, names, X_ = self.remove_redundant_features(spnames, names, X_)
+        if f:
+            pass
+        return spnames, names, X_
+
+    def remove_redundant_features(self, spnames, names, X_):
         sorted_idxs = np.argsort(names)
         for i, idx in enumerate(sorted_idxs):
             if i == 0:
@@ -566,10 +652,8 @@ class FeatureExpansion:
             elif names[idx] != names[sorted_idxs[i-1]]:
                 unique += [idx]
         unique_original_order = np.sort(unique)
-        if f:
-            pass
         return spnames[unique_original_order], names[unique_original_order], X_[:, unique_original_order]
-        
+            
     def extimate_workload(self, X, max_rung):
         rung = max_rung
         p = X.shape[1]
@@ -590,6 +674,7 @@ class FeatureExpansion:
         return p
 
     def FE_aux(self, X, feature_names, prev_start, rung=0, max_rung=0, verbose=False):
+
         def simplify_nested_powers(expr):
             # Replace (x**n)**(1/n) with x
             def flatten_pow_chain(e):
@@ -609,6 +694,10 @@ class FeatureExpansion:
                 flatten_pow_chain
             )
         
+        # if rung == max_rung:
+        #     feature_names = np.array(feature_names)
+        #     sympy_names = np.array([str(name) for name in feature_names])
+
         if rung <= 0:
             return (np.array(feature_names), 
                     np.array(
@@ -638,72 +727,49 @@ class FeatureExpansion:
                             new_name = OP_DICT[op_key]['op'](feature_names[idx1],feature_names[idx2])
                             new_names += (new_name, )
                             if verbose > 1: print(new_name)
-
             if new_names == ():
                 return self.FE_aux(X = X, feature_names=feature_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
             else:
                 return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
 
 if __name__ == "__main__":
-    test = 'fe'
+    random_state = 0
+    n = 100
+    p = 10
+    rung = 3
+    s = 5
+    d = 4
 
-    if test == 'fe':
-        unary = ['sin', 'cos', 'exp', 'log', 'inv', 'abs', 'sqrt', 'sq', 'cbrt', 'cb', 'six_pow']
-        binary = ['add', 'mul', 'sub', 'div', 'abs_diff']
-        ops = unary + binary
-        ops = unary + ['mul']
-        rung = 2
-        X = np.random.random(size=(100, 5))
+    np.random.seed(random_state)
+    X_train = np.random.normal(size=(n, p))
 
-        fe = FeatureExpansion(ops=ops, rung=rung, printrate=1000)
-        start = time()
-        names, str_names, X_ = fe(X=X, verbose=1)
-        fit_time = time() - start
+    y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
+    y_train = y(X_train)
 
-        print('created {0} features in {1} seconds'.format(X_.shape[1], str(np.round(fit_time, 2))))
-        # for name in str_names:
-        #     print(name)
-        # print(len(names))
-    
-    if test == 'icl':
-        random_state = 0
-        n = 100
-        p = 10
-        rung = 3
-        s = 5
-        d = 4
+    # Initialise and fit the ICL model
+    FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
+    so = AdaptiveLASSO(gamma=1, fit_intercept=False)
+    information_criteria='BIC'
 
-        np.random.seed(random_state)
-        X_train = np.random.normal(size=(n, p))
+    X_train_transformed = FE.fit_transform(X_train, y)
+    feature_names = FE.get_feature_names_out()
 
-        y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
+    icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
+    icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
 
-        y_train = y(X_train)
+    # Compute the train and test error and print the model to verify that we have reproduced the data generating function
+    print(icl)
+    print(icl.__repr__())
 
-        # Initialise and fit the ICL model
-        FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
-        so = AdaptiveLASSO(gamma=1, fit_intercept=False)
-        information_criteria='BIC'
+    y_hat_train = icl.predict(X_train_transformed)
 
-        X_train_transformed = FE.fit_transform(X_train, y)
-        feature_names = FE.get_feature_names_out()
+    print("Train rmse: " + str(rmse(y_hat_train, y_train)))
 
-        icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
-        icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
+    X_test = np.random.normal(size=(100*n, p))
+    X_test_transformed = FE.transform(X_test)
+    y_test = y(X_test)
+    y_hat_test = icl.predict(X_test_transformed)
+    print("Test rmse: " + str(rmse(y_hat_test, y_test)))
+    print("k={0}".format(len(icl.coef_[0])))
 
-        # Compute the train and test error and print the model to verify that we have reproduced the data generating function
-        print(icl)
-        print(icl.__repr__())
-
-        y_hat_train = icl.predict(X_train_transformed)
-
-        print("Train rmse: " + str(rmse(y_hat_train, y_train)))
-
-        X_test = np.random.normal(size=(100*n, p))
-        X_test_transformed = FE.transform(X_test)
-        y_test = y(X_test)
-        y_hat_test = icl.predict(X_test_transformed)
-        print("Test rmse: " + str(rmse(y_hat_test, y_test)))
-        print("k={0}".format(len(icl.coef_[0])))
-
-        # print(icl.intermediates)
+    # print(icl.intermediates)
