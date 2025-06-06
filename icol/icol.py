@@ -556,7 +556,7 @@ class BOOTSTRAP:
 
     def sample(self, n, ret_idx=False):
         in_idx = np.random.randint(low=0, high=self.X.shape[0], size=n)
-        out_idx = list(set(range(X.shape[0])) - set(in_idx))
+        out_idx = list(set(range(self.X.shape[0])) - set(in_idx))
         if ret_idx:
             return in_idx, out_idx
         else:
