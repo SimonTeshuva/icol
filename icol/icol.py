@@ -396,7 +396,7 @@ class ICL:
         ret = []
         for i, name in enumerate(self.feature_names_sparse_):
             ret += [('+' if self.coef_[0, i] > 0 else '') + str(np.round(self.coef_[0, i], prec)) + name]
-        ret += [str(float(np.round(self.intercept_, prec)))]
+        ret += ['+' + str(float(np.round(self.intercept_, prec)))]
         return ''.join(ret)
     
         # return '+'.join(['{0}({1})'.format(str(np.round(b, 3)), self.feature_names_sparse_[i]) for i, b in enumerate(self.coef_) if np.abs(b) > 0]+[str(self.intercept_)])
@@ -624,7 +624,6 @@ class ICL_ensemble:
             return rvs.mean(axis=1), rvs.std(axis=1)
         else:
             return rvs.mean(axis=1)
-
 
 class FeatureExpansion:
     def __init__(self, ops, rung, printrate=1000):
