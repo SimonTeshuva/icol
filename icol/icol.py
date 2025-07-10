@@ -395,7 +395,7 @@ class ICL:
     def __repr__(self, prec=3):
         ret = []
         for i, name in enumerate(self.feature_names_sparse_):
-            ret += [('+' if self.coef_[0, i] > 0 else '') + str(np.round(self.coef_[0, i], prec)) + name]
+            ret += [('+' if self.coef_[0, i] > 0 else '') + str(np.round(self.coef_[0, i], prec)) + str(name)]
         ret += ['+' + str(float(np.round(self.intercept_, prec)))]
         return ''.join(ret)
     
