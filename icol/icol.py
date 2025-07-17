@@ -637,6 +637,8 @@ class FeatureExpansion:
             feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
         else:
             feature_names = sp.symbols(' '.join([name for name in feature_names]))
+        if verbose: print('Initial Features')
+        if verbose: print(feature_names)
         if verbose: print('Performing Feature Expansion')
         if verbose: print('Estimating the creation of {0} features with duplicates'.format(self.extimate_workload(X=X, max_rung=self.rung)))
         spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, max_rung=self.rung, prev_start = -1, verbose=verbose)
@@ -723,7 +725,7 @@ class FeatureExpansion:
                     pairings = combinations if OP_DICT[op_key]['commutative'] else permutations
                     for idx1, idx2 in pairings(range(len(feature_names)), 2): 
                         if verbose and ((len(feature_names) + len(new_names)) % self.printrate == 0): print('Created {0} Features'.format(len(feature_names) + len(new_names)))
-                        # make sure at least one of the features if from the new features
+                        # make sure at least one of the features is from the new features
                         if idx1 >= prev_start or idx2 >= prev_start: 
                             new_col = OP_DICT[op_key]['op_np'](X[:, idx1], X[:, idx2]).reshape(X.shape[0], 1).reshape(X.shape[0], 1)
                             new_X = new_col if len(new_names) == 0 else np.hstack([new_X,new_col])
@@ -736,49 +738,21 @@ class FeatureExpansion:
                 return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
 
 if __name__ == "__main__":
-    random_state = 0
-    n = 100
-    p = 10
-    rung = 3
-    s = 5
-    d = 4
+    # random_state = 0
+    # n = 100
+    # p = 10
+    # rung = 3
+    # s = 5
+    # d = 4
 
-    np.random.seed(random_state)
-    X_train = np.random.normal(size=(n, p))
+    # np.random.seed(random_state)
+    # X_train = np.random.normal(size=(n, p))
 
-    y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
-    y_train = y(X_train)
+    # y = lambda X: X[:, 0] + 2*X[:, 1]**2 - X[:, 0]*X[:, 1] + 3*X[:, 2]**3
+    # y_train = y(X_train)
 
-    # Initialise and fit the ICL model
-    FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
-    so = AdaptiveLASSO(gamma=1, fit_intercept=False)
-    information_criteria='BIC'
-
-    X_train_transformed = FE.fit_transform(X_train, y)
-    feature_names = FE.get_feature_names_out()
-
-    icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
-    icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
-
-    # Compute the train and test error and print the model to verify that we have reproduced the data generating function
-    print(icl)
-    print(icl.__repr__())
-
-    y_hat_train = icl.predict(X_train_transformed)
-
-    print("Train rmse: " + str(rmse(y_hat_train, y_train)))
-
-    X_test = np.random.normal(size=(100*n, p))
-    X_test_transformed = FE.transform(X_test)
-    y_test = y(X_test)
-    y_hat_test = icl.predict(X_test_transformed)
-    print("Test rmse: " + str(rmse(y_hat_test, y_test)))
-    print("k={0}".format(len(icl.coef_[0])))
-
-    # print(icl.intermediates)
-
-    # Fitting model with non-polynomial features
-
+    # # Initialise and fit the ICL model
+    # FE = PolynomialFeaturesICL(rung=rung, include_bias=False)
     # so = AdaptiveLASSO(gamma=1, fit_intercept=False)
     # information_criteria='BIC'
 
@@ -788,18 +762,57 @@ if __name__ == "__main__":
     # icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
     # icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
 
-    #######
-    # testing feature expansion here
-    
-    n = 10
-    p = 5
-    X = np.random.random(size=(n,p))
+    # # Compute the train and test error and print the model to verify that we have reproduced the data generating function
+    # print(icl)
+    # print(icl.__repr__())
+
+    # y_hat_train = icl.predict(X_train_transformed)
+
+    # print("Train rmse: " + str(rmse(y_hat_train, y_train)))
+
+    # X_test = np.random.normal(size=(100*n, p))
+    # X_test_transformed = FE.transform(X_test)
+    # y_test = y(X_test)
+    # y_hat_test = icl.predict(X_test_transformed)
+    # print("Test rmse: " + str(rmse(y_hat_test, y_test)))
+    # print("k={0}".format(len(icl.coef_[0])))
+
+    # # print(icl.intermediates)
+
+    # # Fitting model with non-polynomial features
+
+    # # so = AdaptiveLASSO(gamma=1, fit_intercept=False)
+    # # information_criteria='BIC'
+
+    # # X_train_transformed = FE.fit_transform(X_train, y)
+    # # feature_names = FE.get_feature_names_out()
+
+    # # icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
+    # # icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
+
+    # #######
+    # # testing feature expansion here
+
+    import os
+    import pandas as pd
+
+    n = 5
+    root = '/'.join(os.getcwd().split('/')[:-1])
+    f = os.path.join(root, 'ExperimentCode', 'Input', 'data_bulk_modulus.csv')
+    df = pd.read_csv(f)
+    y = df['bulk_modulus (eV/AA^3)'].values
+    X = df.drop(columns=['bulk_modulus (eV/AA^3)', 'material', 'A', 'B1', 'B2'])   
+    feature_names = X.columns
+    X = X.values
+
+    X = X[:n, :]
+    y = y[:n]
 
     ops = OP_DICT.keys()
-    cols = ['X_{0}'.format(i) for i in range(p)]
     rung = 1
-
     fe = FeatureExpansion(rung=rung, ops=OP_DICT.keys())
-    spnames, names, X_ = fe(X=X, feature_names=cols)
+    spnames, names, X_ = fe(X=X, feature_names=feature_names, verbose=True)
 
-    print(names)
+    for name in names:
+        print(name)
+    print(len(names))
