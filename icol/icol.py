@@ -633,7 +633,10 @@ class FeatureExpansion:
 
     def __call__(self, X, feature_names=None, verbose=False, f=None):
         if verbose: print('Prepping Symbols')
-        if feature_names is None: feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
+        if (feature_names is None) or (len(feature_names) != X.shape[1]):
+            feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
+        else:
+            feature_names = sp.symbols(' '.join([name for name in feature_names]))
         if verbose: print('Performing Feature Expansion')
         if verbose: print('Estimating the creation of {0} features with duplicates'.format(self.extimate_workload(X=X, max_rung=self.rung)))
         spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, max_rung=self.rung, prev_start = -1, verbose=verbose)
@@ -702,6 +705,7 @@ class FeatureExpansion:
                     np.array(
                         [str(sp.simplify(simplify_nested_powers(name)))for name in feature_names]), 
                     X)
+
         else:
             if verbose: print('Creating rung {0} features'.format(max_rung - rung+1)) 
             new_names = ()
@@ -772,3 +776,30 @@ if __name__ == "__main__":
     print("k={0}".format(len(icl.coef_[0])))
 
     # print(icl.intermediates)
+
+    # Fitting model with non-polynomial features
+
+    # so = AdaptiveLASSO(gamma=1, fit_intercept=False)
+    # information_criteria='BIC'
+
+    # X_train_transformed = FE.fit_transform(X_train, y)
+    # feature_names = FE.get_feature_names_out()
+
+    # icl = ICL(s=s, so=so, d=d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=information_criteria)
+    # icl.fit(X_train_transformed, y_train, feature_names=feature_names, verbose=True, track_intermediates=True)
+
+    #######
+    # testing feature expansion here
+    
+    n = 10
+    p = 5
+    X = np.random.random(size=(n,p))
+
+    ops = OP_DICT.keys()
+    cols = ['X_{0}'.format(i) for i in range(p)]
+    rung = 1
+
+    fe = FeatureExpansion(rung=rung, ops=OP_DICT.keys())
+    spnames, names, X_ = fe(X=X, feature_names=cols)
+
+    print(names)
