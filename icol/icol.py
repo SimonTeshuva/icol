@@ -631,24 +631,7 @@ class FeatureExpansion:
         self.rung = rung
         self.printrate = printrate
 
-    def __call__(self, X, feature_names=None, verbose=False, f=None):
-        if verbose: print('Prepping Symbols')
-        if (feature_names is None) or (len(feature_names) != X.shape[1]):
-            feature_names = sp.symbols(' '.join(['x_{0}'.format(i) for i in range(X.shape[1])]))
-        else:
-            feature_names = sp.symbols(' '.join([name for name in feature_names]))
-        if verbose: print('Initial Features')
-        if verbose: print(feature_names)
-        if verbose: print('Performing Feature Expansion')
-        if verbose: print('Estimating the creation of {0} features with duplicates'.format(self.extimate_workload(X=X, max_rung=self.rung)))
-        spnames, names, X_ = self.FE_aux(X=X, feature_names=feature_names, rung=self.rung, max_rung=self.rung, prev_start = -1, verbose=verbose)
-        if verbose: print('Created {0} features, now removing duplicate features'.format(X_.shape[1]))
-        spnames, names, X_ = self.remove_redundant_features(spnames, names, X_)
-        if f:
-            pass
-        return spnames, names, X_
-
-    def remove_redundant_features(self, spnames, names, X_):
+    def remove_redundant_features(self, symbols, names, X):
         sorted_idxs = np.argsort(names)
         for i, idx in enumerate(sorted_idxs):
             if i == 0:
@@ -656,9 +639,10 @@ class FeatureExpansion:
             elif names[idx] != names[sorted_idxs[i-1]]:
                 unique += [idx]
         unique_original_order = np.sort(unique)
-        return spnames[unique_original_order], names[unique_original_order], X_[:, unique_original_order]
+        
+        return symbols[unique_original_order], names[unique_original_order], X[:, unique_original_order]
             
-    def extimate_workload(self, X, max_rung):
+    def estimate_workload(self, X, max_rung):
         rung = max_rung
         p = X.shape[1]
         p_prev = X.shape[1]
@@ -676,9 +660,22 @@ class FeatureExpansion:
             p = p + new_unary + new_binary
             rung -= 1
         return p
-
-    def FE_aux(self, X, feature_names, prev_start, rung=0, max_rung=0, verbose=False):
-
+    
+    def expand(self, X, names=None, verbose=False, f=None):
+        n, p = X.shape
+        if (names is None) or (len(names) != p):
+            names = ['x_{0}'.format(i) for i in range(X.shape[1])]
+        symbols = np.array(sp.symbols(' '.join(name for name in names)))
+        names = np.array(names)
+        
+        names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
+        return names, symbols, X
+    
+    def add_new(self, names, symbols, X):
+        pass
+    
+    def expand_aux(self, X, names, symbols, crung, prev_p, verbose=False):
+        
         def simplify_nested_powers(expr):
             # Replace (x**n)**(1/n) with x
             def flatten_pow_chain(e):
@@ -698,44 +695,65 @@ class FeatureExpansion:
                 flatten_pow_chain
             )
         
-        # if rung == max_rung:
-        #     feature_names = np.array(feature_names)
-        #     sympy_names = np.array([str(name) for name in feature_names])
-
-        if rung <= 0:
-            return (np.array(feature_names), 
-                    np.array(
-                        [str(sp.simplify(simplify_nested_powers(name)))for name in feature_names]), 
-                    X)
-
+        if crung == 0:
+            symbols, names, X = self.remove_redundant_features(X=X, names=names, symbols=symbols)
+        if crung==self.rung:
+            if verbose: print('Completed {0} rounds of feature transformations'.format(self.rung))
+            return symbols, names, X
         else:
-            if verbose: print('Creating rung {0} features'.format(max_rung - rung+1)) 
-            new_names = ()
+            if verbose: print('Applying round {0} of feature transformations'.format(crung+1))
+            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(X=X, max_rung=1)))
+                
+            new_names, new_symbols, new_X = None, None, None
+            
             for op_key in self.ops:
-                if OP_DICT[op_key]['inputs'] == 1:
-                    for i in range(prev_start, len(feature_names)):
-                        if verbose and ((len(feature_names) + len(new_names)) % self.printrate == 0): print('Created {0} Features'.format(len(feature_names) + len(new_names)))
-                        if len(new_names) == 0:
-                            new_X = OP_DICT[op_key]['op_np'](X[:, i]).reshape(X.shape[0], 1)
+                if verbose>1: print('Applying operator {0} to {1} features'.format(op_key, X.shape[1]))
+                op_params = OP_DICT[op_key]
+                op_sym, op_np, inputs, comm = op_params['op'], op_params['op_np'], op_params['inputs'], op_params['commutative']
+                for i in range(prev_p, X.shape[1]):
+                    if inputs == 1:
+                        new_symbol = op_sym(symbols[i])
+                        new_name = str(sp.simplify(simplify_nested_powers(new_symbol)))
+                        new_X_i = op_np(X[:, i]).reshape(-1, 1)
+                        if new_names is None:
+                            new_names = [new_name]
+                            new_symbols = [new_symbol]
+                            new_X = np.array(new_X_i)
                         else:
-                            new_X = np.hstack([new_X, OP_DICT[op_key]['op_np'](X[:, i]).reshape(X.shape[0], 1)])
-                        new_names += (OP_DICT[op_key]['op'](feature_names[i]), )
-                        if verbose>1: print(new_names[-1])
-                elif OP_DICT[op_key]['inputs'] == 2:
-                    pairings = combinations if OP_DICT[op_key]['commutative'] else permutations
-                    for idx1, idx2 in pairings(range(len(feature_names)), 2): 
-                        if verbose and ((len(feature_names) + len(new_names)) % self.printrate == 0): print('Created {0} Features'.format(len(feature_names) + len(new_names)))
-                        # make sure at least one of the features is from the new features
-                        if idx1 >= prev_start or idx2 >= prev_start: 
-                            new_col = OP_DICT[op_key]['op_np'](X[:, idx1], X[:, idx2]).reshape(X.shape[0], 1).reshape(X.shape[0], 1)
-                            new_X = new_col if len(new_names) == 0 else np.hstack([new_X,new_col])
-                            new_name = OP_DICT[op_key]['op'](feature_names[idx1],feature_names[idx2])
-                            new_names += (new_name, )
-                            if verbose > 1: print(new_name)
-            if new_names == ():
-                return self.FE_aux(X = X, feature_names=feature_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
+                            new_names += [new_name]
+                            new_symbols += [new_symbol]
+                            new_X = np.hstack([new_X, new_X_i])
+                        if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)+prev_p))
+                    if inputs == 2:
+                        stop = i+1 if comm else X.shape[1]
+                        for j in range(stop):
+                            new_symbol = op_sym(symbols[i], symbols[j])
+                            new_name = str(sp.simplify(simplify_nested_powers(new_symbol)))
+                            new_X_i = op_np(X[:, i], X[:, j]).reshape(-1, 1)
+                            if new_names is None:
+                                new_names = [new_name]
+                                new_symbols = [new_symbol]
+                                new_X = np.array(new_X_i)
+                            else:
+                                new_names += [new_name]
+                                new_symbols += [new_symbol]
+                                new_X = np.hstack([new_X, new_X_i])
+                            if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)+prev_p))
+            
+            if not(new_names is None):                
+                names = np.concatenate((names, new_names))
+                symbols = np.concatenate((symbols, new_symbols))
+                prev_p = X.shape[1]
+                X = np.hstack([X, new_X])
             else:
-                return self.FE_aux(X = np.hstack([X, new_X]), feature_names=feature_names+new_names, rung=rung-1, prev_start=len(feature_names), max_rung=max_rung, verbose=verbose)
+                prev_p = X.shape[1]
+                
+            if verbose: print('After applying rounds {0} of feature transformations there are {1} features'.format(crung+1, X.shape[1]))
+            if verbose: print('Removing redundant features leaves... ', end='')            
+            symbols, names, X = self.remove_redundant_features(X=X, names=names, symbols=symbols)
+            if verbose: print('{0} features'.format(X.shape[1]))
+
+            return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
 
 if __name__ == "__main__":
     # random_state = 0
@@ -808,11 +826,17 @@ if __name__ == "__main__":
     X = X[:n, :]
     y = y[:n]
 
-    ops = OP_DICT.keys()
+    unary_ops = ['sin', 'cos', 'log', 'exp', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
+    unary_ops = []
+    binary_ops = ['mul', 'div', 'abs_diff']
+    binary_ops = ['mul']
+    ops = unary_ops + binary_ops
+
+
     rung = 1
-    fe = FeatureExpansion(rung=rung, ops=OP_DICT.keys())
+    fe = FeatureExpansion(rung=rung, ops=ops)
     spnames, names, X_ = fe(X=X, feature_names=feature_names, verbose=True)
 
-    for name in names:
-        print(name)
+    # for name in names:
+    #     print(name)
     print(len(names))
