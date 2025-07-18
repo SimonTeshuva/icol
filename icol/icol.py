@@ -641,25 +641,6 @@ class FeatureExpansion:
         unique_original_order = np.sort(unique)
         
         return symbols[unique_original_order], names[unique_original_order], X[:, unique_original_order]
-            
-    def estimate_workload(self, X, max_rung):
-        rung = max_rung
-        p = X.shape[1]
-        p_prev = X.shape[1]
-        unary = 0
-        binary = 0
-        for op in self.ops:
-            if OP_DICT[op]['inputs'] == 1:
-                unary += 1
-            elif OP_DICT[op]['inputs'] == 2:
-                binary += 1
-        while rung > 0:
-            new_unary = unary*(p-p_prev) if rung != max_rung else unary*p
-            new_binary = int(binary*(p-p_prev)*(p-1)) if rung != max_rung else int(binary*p*(p-1)/2)
-            p_prev = p
-            p = p + new_unary + new_binary
-            rung -= 1
-        return p
     
     def expand(self, X, names=None, verbose=False, f=None):
         n, p = X.shape
@@ -668,12 +649,46 @@ class FeatureExpansion:
         symbols = np.array(sp.symbols(' '.join(name for name in names)))
         names = np.array(names)
         
+        if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung)))
+        
         names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
         return names, symbols, X
     
-    def add_new(self, names, symbols, X):
-        pass
-    
+    def estimate_workload(self, p, max_rung):
+        u, bc, bn = 0,0,0
+        for op in self.ops:
+            if OP_DICT[op]['inputs'] == 1:
+                u +=1
+            elif OP_DICT[op]['commutative'] == True:
+                bc += 1
+            else:
+                bn += 1
+        
+        p0 = 0
+        p1 = p
+        for rung in range(max_rung):
+            new_u = p*u
+            new_bc = (1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)*bc
+            new_bn = (p1 - p0 + 1)*(p0 + p1 + 2)*bn
+            p0 = p1
+            p1 = p1 + new_u + new_bc + new_bn
+        
+        return p1
+        
+    def add_new(self, new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=False):
+        valid = (np.isnan(new_X_i).sum() + np.isposinf(new_X_i).sum() + np.isneginf(new_X_i).sum()) == 0
+        if valid:
+            if new_names is None:
+                new_names = [new_name]
+                new_symbols = [new_symbol]
+                new_X = np.array(new_X_i)
+            else:
+                new_names += [new_name]
+                new_symbols += [new_symbol]
+                new_X = np.hstack([new_X, new_X_i])
+            if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)))
+        return new_names, new_symbols, new_X
+
     def expand_aux(self, X, names, symbols, crung, prev_p, verbose=False):
         
         def simplify_nested_powers(expr):
@@ -702,7 +717,7 @@ class FeatureExpansion:
             return symbols, names, X
         else:
             if verbose: print('Applying round {0} of feature transformations'.format(crung+1))
-            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(X=X, max_rung=1)))
+            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(p=X.shape[1], max_rung=1)))
                 
             new_names, new_symbols, new_X = None, None, None
             
@@ -715,31 +730,19 @@ class FeatureExpansion:
                         new_symbol = op_sym(symbols[i])
                         new_name = str(sp.simplify(simplify_nested_powers(new_symbol)))
                         new_X_i = op_np(X[:, i]).reshape(-1, 1)
-                        if new_names is None:
-                            new_names = [new_name]
-                            new_symbols = [new_symbol]
-                            new_X = np.array(new_X_i)
-                        else:
-                            new_names += [new_name]
-                            new_symbols += [new_symbol]
-                            new_X = np.hstack([new_X, new_X_i])
-                        if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)+prev_p))
+                        new_names, new_symbols, new_X = self.add_new(new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=verbose)
                     if inputs == 2:
-                        stop = i+1 if comm else X.shape[1]
-                        for j in range(stop):
+                        for j in range(i+1):
                             new_symbol = op_sym(symbols[i], symbols[j])
                             new_name = str(sp.simplify(simplify_nested_powers(new_symbol)))
                             new_X_i = op_np(X[:, i], X[:, j]).reshape(-1, 1)
-                            if new_names is None:
-                                new_names = [new_name]
-                                new_symbols = [new_symbol]
-                                new_X = np.array(new_X_i)
-                            else:
-                                new_names += [new_name]
-                                new_symbols += [new_symbol]
-                                new_X = np.hstack([new_X, new_X_i])
-                            if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)+prev_p))
-            
+                            new_names, new_symbols, new_X = self.add_new(new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=verbose)
+                            if not comm:
+                                new_symbol = op_sym(symbols[j], symbols[i])
+                                new_name = str(sp.simplify(simplify_nested_powers(new_symbol)))
+                                new_X_i = op_np(X[:, j], X[:, i]).reshape(-1, 1)
+                                new_names, new_symbols, new_X = self.add_new(new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=verbose)
+
             if not(new_names is None):                
                 names = np.concatenate((names, new_names))
                 symbols = np.concatenate((symbols, new_symbols))
