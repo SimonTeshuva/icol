@@ -624,13 +624,15 @@ class ICL_ensemble:
             return rvs.mean(axis=1), rvs.std(axis=1)
         else:
             return rvs.mean(axis=1)
-
 class FeatureExpansion:
     def __init__(self, ops, rung, printrate=1000):
         self.ops = ops
         self.rung = rung
         self.printrate = printrate
         self.prev_print = 0
+        for i, op in enumerate(self.ops):
+            if type(op) == str:
+                self.ops[i] = (op, range(rung))
         
     def remove_redundant_features(self, symbols, names, X):
         sorted_idxs = np.argsort(names)
@@ -650,30 +652,32 @@ class FeatureExpansion:
         symbols = np.array(sp.symbols(' '.join(name for name in names)))
         names = np.array(names)
         
-        if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung)))
+        if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung, verbose=verbose>2)))
         
         names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
         return names, symbols, X
         
-    def estimate_workload(self, p, max_rung):
-        u, bc, bn = 0,0,0
-        for op in self.ops:
-            if OP_DICT[op]['inputs'] == 1:
-                u +=1
-            elif OP_DICT[op]['commutative'] == True:
-                bc += 1
-            else:
-                bn += 1
-        
+    def estimate_workload(self, p, max_rung,verbose=False):
         p0 = 0
         p1 = p
         for rung in range(max_rung):
-            new_u = p*u
-            new_bc = (1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)*bc
-            new_bn = (p1 - p0 + 1)*(p0 + p1 + 2)*bn
+            if verbose: print('Applying rung {0} expansion'.format(rung))
+            new_u, new_bc, new_bn = 0, 0, 0
+            for (op, rung_range) in self.ops:
+                if rung in rung_range:
+                    if verbose: print('Applying {0} to {1} features will result in approximately '.format(op, p1-p0))
+                    if OP_DICT[op]['inputs'] == 1:
+                        new_u += p1
+                        if verbose: print('{0} new features'.format(p1))
+                    elif OP_DICT[op]['commutative'] == True:
+                        new_bc += (1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)
+                        if verbose: print('{0} new features'.format((1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)))
+                    else:
+                        new_bn += (p1 - p0 + 1)*(p0 + p1 + 2)
+                        if verbose: print('{0} new features'.format((p1 - p0 + 1)*(p0 + p1 + 2)))
             p0 = p1
             p1 = p1 + new_u + new_bc + new_bn
-        
+            if verbose: print('For a total of {0} features by rung {1}'.format(p1, rung))
         return p1
         
     def add_new(self, new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=False):
@@ -724,32 +728,33 @@ class FeatureExpansion:
             return symbols, names, X
         else:
             if verbose: print('Applying round {0} of feature transformations'.format(crung+1))
-            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(p=X.shape[1], max_rung=1)))
+#            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(p=X.shape[1], max_rung=1)))
                 
             new_names, new_symbols, new_X = None, None, None
             
-            for op_key in self.ops:
-                if verbose>1: print('Applying operator {0} to {1} features'.format(op_key, X.shape[1]))
-                op_params = OP_DICT[op_key]
-                op_sym, op_np, inputs, comm = op_params['op'], op_params['op_np'], op_params['inputs'], op_params['commutative']
-                if inputs == 1:
-                    sym_vect = np.vectorize(op_sym)
-                    new_op_symbols = sym_vect(symbols[prev_p:])
-                    new_op_X = op_np(X[:, prev_p:])
-                    new_op_names = str_vectorize(new_op_symbols)
-                    new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
-                                                                 new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
-                elif inputs == 2:
-                    for idx1 in range(prev_p, X.shape[1]):
-                        sym_vect = np.vectorize(lambda idx2: op_sym(symbols[idx1], symbols[idx2]))
-                        idx2 = range(idx1 if comm else X.shape[1])
-                        if len(idx2) > 0:
-                            new_op_symbols = sym_vect(idx2)
-                            new_op_names = str_vectorize(new_op_symbols)
-                            X_i = X[:, idx1]
-                            new_op_X = X_i[:, np.newaxis]*X[:, idx2]                                                
-                            new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
-                                                                     new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
+            for (op_key, rung_range) in self.ops:
+                if crung in rung_range:
+                    if verbose>1: print('Applying operator {0} to {1} features'.format(op_key, X.shape[1]))
+                    op_params = OP_DICT[op_key]
+                    op_sym, op_np, inputs, comm = op_params['op'], op_params['op_np'], op_params['inputs'], op_params['commutative']
+                    if inputs == 1:
+                        sym_vect = np.vectorize(op_sym)
+                        new_op_symbols = sym_vect(symbols[prev_p:])
+                        new_op_X = op_np(X[:, prev_p:])
+                        new_op_names = str_vectorize(new_op_symbols)
+                        new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
+                                                                    new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
+                    elif inputs == 2:
+                        for idx1 in range(prev_p, X.shape[1]):
+                            sym_vect = np.vectorize(lambda idx2: op_sym(symbols[idx1], symbols[idx2]))
+                            idx2 = range(idx1 if comm else X.shape[1])
+                            if len(idx2) > 0:
+                                new_op_symbols = sym_vect(idx2)
+                                new_op_names = str_vectorize(new_op_symbols)
+                                X_i = X[:, idx1]
+                                new_op_X = X_i[:, np.newaxis]*X[:, idx2]                                                
+                                new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
+                                                                        new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
             if not(new_names is None):                
                 names = np.concatenate((names, new_names))
                 symbols = np.concatenate((symbols, new_symbols))
@@ -764,7 +769,7 @@ class FeatureExpansion:
             if verbose: print('{0} features'.format(X.shape[1]))
 
             return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
-
+        
 if __name__ == "__main__":
     # random_state = 0
     # n = 100
