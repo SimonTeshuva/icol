@@ -382,8 +382,7 @@ class ICL:
         self.s = s
         self.sis = SIS(n_sis=s)
         self.so = so
-        self.max_k = k
-        self.k = self.max_k
+        self.k = k
         self.fit_intercept = fit_intercept
         self.normalize=normalize
         self.pool_reset = pool_reset
@@ -392,7 +391,7 @@ class ICL:
     def get_params(self, deep=False):
         return {'s': self.s,
                 'so': self.so,
-                'max_k': self.max_k,
+                'k': self.k,
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
@@ -400,7 +399,7 @@ class ICL:
                 }
 
     def __str__(self):
-        return 'ICL(n_sis={0}, SO={1}, k={2})'.format(self.s, str(self.so), self.max_k)
+        return 'ICL(n_sis={0}, SO={1}, k={2})'.format(self.s, str(self.so), self.k)
 
     def __repr__(self, prec=3):
         ret = []
@@ -453,12 +452,12 @@ class ICL:
     def fitting(self, X, y, feature_names=None, verbose=False, track_pool=False, opt_k = None):
         self.feature_names_ = feature_names
         n,p = X.shape
-        stopping = self.max_k if opt_k is None else opt_k
+        stopping = self.k if opt_k is None else opt_k
         if verbose: print('Stopping after {0} iterations'.format(stopping))
 
         pool_ = set()
         if track_pool: self.pool = []
-        if self.optimize_k: self.intermediates = np.empty(shape=(self.max_k, 5), dtype=object)
+        if self.optimize_k: self.intermediates = np.empty(shape=(self.k, 5), dtype=object)
 
         res = y
         i = 0
@@ -538,7 +537,7 @@ class ICL:
             X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=val_size, random_state=random_state)
             self.fitting(X=X_train, y=y_train, feature_names=feature_names_, verbose=verbose, track_pool = track_pool)
             best_k, best_e2 = 0, np.infty
-            for k in range(self.max_k):
+            for k in range(self.k):
                 idx = self.intermediates[k, 0]
                 coef = self.intermediates[k, 1]
                 inter = self.intermediates[k, 2]
