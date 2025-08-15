@@ -11,6 +11,7 @@ import sympy as sp
 from sklearn.linear_model import lars_path, Ridge
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.base import clone
+from sklearn.model_selection import train_test_split
 
 from sklearn.metrics import mean_squared_error
 
@@ -24,7 +25,7 @@ def LL(res):
 IC_DICT = {
     'AIC': lambda res, k: LL(res) + 2*k,
     'HQIC': lambda res, k: LL(res) + np.log(np.log(len(res)))*k,
-    'AIC': lambda res, k: LL(res) + 2*k,
+    'BIC': lambda res, k, n: LL(res) + 2*k*np.log(n),
     'CAIC': lambda res, k: LL(res) + (np.log(len(res))+1)*k,
     'AICc': lambda res, k: LL(res) + 2*k + 2*k*(k+1)/(len(res)-k-1)
 }
@@ -284,6 +285,7 @@ class AdaptiveLASSO:
             beta_hat_star_star = coefs[:, d]
         except IndexError:
             beta_hat_star_star = coefs[:, -1]
+
         beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
         beta_hat_star_n = np.zeros(X.shape[1])
         beta_hat_star_n[valcols] = beta_hat_star_n_valcol
@@ -376,38 +378,38 @@ class SIS:
         return best_corr, best_idxs
 
 class ICL:
-    def __init__(self, s, so, d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=None): #, track_intermediates=False):
+    def __init__(self, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, optimize_k=False):
         self.s = s
         self.sis = SIS(n_sis=s)
         self.so = so
-        self.d = d
+        self.max_k = k
+        self.k = self.max_k
         self.fit_intercept = fit_intercept
         self.normalize=normalize
         self.pool_reset = pool_reset
-        self.information_criteria = information_criteria if information_criteria in IC_DICT.keys() else None
-        # self.track_intermediates = track_intermediates
+        self.optimize_k = optimize_k
     
     def get_params(self, deep=False):
         return {'s': self.s,
                 'so': self.so,
-                'd': self.d,
+                'max_k': self.max_k,
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
-                'information_criteria': self.information_criteria
+                'self.optimize_k': self.optimize_k
                 }
 
     def __str__(self):
-        return 'SISSO(n_sis={0}, SO={1}, d={2})'.format(self.s, str(self.so), self.d)
+        return 'ICL(n_sis={0}, SO={1}, k={2})'.format(self.s, str(self.so), self.max_k)
 
     def __repr__(self, prec=3):
         ret = []
         for i, name in enumerate(self.feature_names_sparse_):
-            ret += [('+' if self.coef_[0, i] > 0 else '') + str(np.round(self.coef_[0, i], prec)) + str(name)]
+            ret += [('+' if self.coef_[0, i] > 0 else '') + 
+                    str(np.format_float_scientific(self.coef_[0, i], precision=prec, unique=False))
+                      + ' (' + str(name) + ')' + '\n']
         ret += ['+' + str(float(np.round(self.intercept_, prec)))]
         return ''.join(ret)
-    
-        # return '+'.join(['{0}({1})'.format(str(np.round(b, 3)), self.feature_names_sparse_[i]) for i, b in enumerate(self.coef_) if np.abs(b) > 0]+[str(self.intercept_)])
      
     def solve_norm_coef(self, X, y):
         n, p = X.shape
@@ -448,18 +450,20 @@ class ICL:
 
         return bad_cols
 
-    def fitting(self, X, y, feature_names=None, verbose=False, track_pool=False, track_intermediates=False):
+    def fitting(self, X, y, feature_names=None, verbose=False, track_pool=False, opt_k = None):
         self.feature_names_ = feature_names
         n,p = X.shape
+        stopping = self.max_k if opt_k is None else opt_k
+        if verbose: print('Stopping after {0} iterations'.format(stopping))
 
         pool_ = set()
         if track_pool: self.pool = []
-        if track_intermediates: self.intermediates = np.empty(shape=(self.d, 5), dtype=object)
+        if self.optimize_k: self.intermediates = np.empty(shape=(self.max_k, 5), dtype=object)
+
         res = y
         i = 0
         IC = np.infty
-        cont = True
-        while i < self.d and cont:
+        while i < stopping:
             self.intercept_ = np.mean(res).squeeze()
             if verbose: print('.', end='')
 
@@ -473,7 +477,7 @@ class ICL:
             beta = np.zeros(shape=(X.shape[1]))
             beta[pool_lst] = beta_i
 
-            if track_intermediates:
+            if self.optimize_k:
                 idx = np.nonzero(beta)[0]
                 if self.normalize:
                     coef = (beta[idx].reshape(1, -1)*self.b_y/self.b_x[idx].reshape(1, -1))
@@ -499,14 +503,9 @@ class ICL:
                 pool_ = set(pool_lst)
 
             res = (y.reshape(1, -1) - (np.dot(X, beta).reshape(1, -1)+self.intercept_) ).T
-            if not(self.information_criteria is None):
-                IC_old = IC
-                IC = IC_DICT[self.information_criteria](res=res, k=i+1)
-                if verbose: print('{0}={1}'.format(self.information_criteria, IC))
-                cont = IC < IC_old
 
             i += 1
-        if track_intermediates: self.intermediates = self.intermediates[:, :i]
+        if self.optimize_k: self.intermediates = self.intermediates[:, :i]
             
         if verbose: print()
         
@@ -519,7 +518,7 @@ class ICL:
 
         return self
 
-    def fit(self, X, y, feature_names=None, timer=False, verbose=False, track_pool=False, track_intermediates=False):
+    def fit(self, X, y, val_size=0.1, feature_names=None, timer=False, verbose=False, track_pool=False, random_state=None):
         if verbose: print('removing invalid features')
         self.bad_col = self.filter_invalid_cols(X)
         X_ = np.delete(X, self.bad_col, axis=1)
@@ -530,9 +529,27 @@ class ICL:
         self.solve_norm_coef(X_, y)
         X_, y_ = self.normalize_Xy(X_, y)
 
-        if verbose: print('Fitting SISSO model')
+        if verbose: print('Fitting ICL model')
         if timer: start=time()
-        self.fitting(X=X_, y=y_, feature_names=feature_names_, verbose=verbose, track_pool = track_pool, track_intermediates=track_intermediates)
+        if self.optimize_k == False:
+            self.fitting(X=X_, y=y_, feature_names=feature_names_, verbose=verbose, track_pool = track_pool)
+        else:
+            if verbose: print('Finding optimal model size')
+            X_train, X_val, y_train, y_val = train_test_split(X_, y_, test_size=val_size, random_state=random_state)
+            self.fitting(X=X_train, y=y_train, feature_names=feature_names_, verbose=verbose, track_pool = track_pool)
+            best_k, best_e2 = 0, np.infty
+            for k in range(self.max_k):
+                idx = self.intermediates[k, 0]
+                coef = self.intermediates[k, 1]
+                inter = self.intermediates[k, 2]
+                X_pred = np.delete(X_val, self.bad_col, axis=1)
+                y_hat = (np.dot(X_pred[:, idx], coef.squeeze()) + inter).reshape(-1, 1)
+                e2_val = rmse(y_hat, y_val)
+                if e2_val < best_e2:
+                    best_k, best_e2 = k+1, e2_val
+            if verbose: print('refitting with k={0}'.format(best_k))
+            self.fitting(X=X_, y=y_, feature_names=feature_names_, verbose=verbose, track_pool = track_pool, opt_k = best_k)
+
         if timer: self.fit_time=time()-start
         if timer and verbose: print(self.fit_time)
 
@@ -803,18 +820,21 @@ if __name__ == "__main__":
 
     root = '/'.join(os.getcwd().split('/')[:-1])
     	
-    f = os.path.join(root, 'ExperimentCode', 'Input', 'data_HTE.csv')
+    f = os.path.join(root, 'ExperimentCode', 'Input', 'data_bandgap.csv')
     df = pd.read_csv(f)
-    target = 'Y_oxygenate'
-    drop = ['material_and_condition']
+    target = 'bg_hse06 (eV)'
+    drop = ['material']
     y = df[target].values
     X = df.drop(columns=drop+[target])   
     feature_names = X.columns
     X = X.values
 
     rung = 2
+    size=0.05
+
 
     unary = ['sin', 'cos', 'log', 'exp', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
+    binary = ['mul', 'div', 'add', 'sub', 'abs_diff']
     binary = ['mul', 'div', 'add', 'sub', 'abs_diff']
     unary = [(op, range(rung)) for op in unary]
     binary = [(op, range(1)) for op in binary]
@@ -826,13 +846,35 @@ if __name__ == "__main__":
     # n,p_ = X_.shape
     n,p = X.shape
     sampler = BOOTSTRAP(X=X, y=y, random_state=0)
-    idx, out = sampler.sample(int(0.05*n), ret_idx=True)
+    idx, out = sampler.sample(int(size*n), ret_idx=True)
 
     X_train, y_train = X_[idx], y[idx]
+    X_test, y_test = X_[out], y[out]
 
-    icol = ICL(s=200, so=AdaptiveLASSO(gamma=1, fit_intercept=False), d=5)
-    icol.fit(X=X_train, y=y_train, feature_names=names, verbose=True)
-    print(icol.coef_)
+    s_max = 3000
+    s = 1
+
+    while s < s_max:
+        icol = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=False)
+        icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False, val_size=0.2)
+        y_hat_test = icol.predict(X_test)
+        print('Not optimizing k')
+        print(icol.__str__())
+        print(icol.__repr__())
+        print(rmse(y_test, y_hat_test))
+
+
+        icol = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=True)
+        icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False, val_size=0.2)
+        y_hat_test = icol.predict(X_test)
+        print('with optimizing k')
+        print(icol.__str__())
+        print(icol.__repr__())
+        print(rmse(y_test, y_hat_test))
+
+        s *= 2
+
+        input()
 
     # idx1 = np.array([8, 3081, 3084, 530, 1049, 1052, 1054, 1059, 3108, 3110, 2088, 555, 1068, 558, 559, 1073, 3121, 568, 2108, 1092, 75, 78, 2647, 1113, 1114, 3674, 604, 3675, 3166, 2658, 1122, 3685, 1638, 616, 2153, 3694, 3182, 113, 1142, 634, 126, 644, 1156, 1159, 1161, 1163, 3212, 1165, 2701, 3213, 3214, 1169, 659, 662, 663, 3224, 665, 1179, 156, 1691, 1184, 3233, 675, 3753, 681, 3246, 3763, 3256, 2750, 191, 1215, 2753, 1218, 1220, 3781, 198, 3782, 3784, 1225, 3785, 721, 1234, 3794, 724, 725, 3282, 1239, 3804, 3292, 734, 3302, 2793, 1258, 1259, 234, 1265, 247, 3319, 3320, 3321, 3323, 3324, 3839, 3840, 770, 1283, 1285, 1286, 3333, 2823, 3850, 3343, 3859, 3347, 283, 800, 2857, 810, 2860, 1325, 1328, 3377, 1330, 3378, 3379, 1335, 825, 828, 829, 3389, 831, 1344, 1856, 2369, 1349, 3398, 841, 1353, 3918, 846, 1361, 338, 3411, 344, 3928, 3421, 354, 2915, 2918, 3946, 3947, 3949, 3950, 886, 3959, 3447, 889, 890, 3969, 3457, 899, 3467, 2958, 399, 922, 412, 3484, 3485, 3486, 3488, 3489, 4004, 933, 4005, 3498, 2988, 4015, 435, 3508, 439, 4024, 3512, 4029, 4037, 4045, 3023, 465, 3026, 3542, 3543, 984, 473, 3544, 990, 3554, 995, 3563, 1006, 3568, 3573])
     # idx2 = np.array([8, 2088, 1637, 2108, 75, 78, 2153, 113, 126, 156, 191, 198, 234, 247, 283, 2369, 4418, 338, 344, 354, 399, 412, 435, 439, 465, 473, 530, 555, 558, 559, 568, 2647, 604, 2658, 616, 634, 644, 2701, 659, 662, 663, 665, 675, 681, 2750, 2753, 721, 724, 725, 734, 2793, 770, 2823, 800, 2857, 810, 2860, 825, 828, 829, 831, 841, 846, 2915, 2918, 886, 889, 890, 899, 2958, 922, 933, 2988, 3023, 3026, 984, 1417, 990, 1418, 995, 1419, 1006, 3081, 3084, 1049, 1052, 1054, 1059, 3108, 3110, 1068, 1073, 3121, 1436, 1437, 1438, 1092, 1440, 1104, 1441, 1113, 1114, 3166, 1122, 3182, 1142, 1156, 1159, 1161, 1163, 3212, 1165, 3213, 3214, 1169, 3224, 1179, 1184, 3233, 3246, 3256, 1215, 1218, 1220, 1225, 1234, 3282, 1239, 3292, 3302, 1258, 1259, 1265, 3319, 3320, 3321, 3323, 3324, 1283, 1285, 1286, 3333, 3343, 3347, 1482, 1325, 1328, 3377, 1330, 3378, 3379, 1335, 3389, 1344, 1349, 3398, 1353, 1361, 3411, 3421, 1382, 1383, 1384, 1385, 1386, 1387, 1388, 1389, 1390, 1391, 1392, 1393, 1394, 1395, 1396, 1397, 1398, 3447, 1399, 1400, 1401, 1402, 1403, 1405, 1404, 1406, 1407, 3457, 1408, 1409, 1410, 1413, 1414, 1411, 1412, 1415, 1416, 3467, 1420, 1421, 1422, 1423, 1424, 1425, 1426, 1427, 1428, 1429, 1430, 1431, 1432, 1433, 1434, 1435, 3484, 3485, 3486, 1439, 3488, 3489, 1442, 1443, 1444, 1445, 1446, 1447, 1448, 1449, 1450, 3498, 1452, 1451, 1453, 1455, 1454, 1456, 1457, 1459, 1460, 1458, 3508, 1463, 1464, 1465, 1461, 1462, 3512, 1466, 1467, 1468, 1469, 1470, 1471, 1472, 1474, 1473, 1475, 1476, 1477, 1478, 1479, 1480, 1483, 1481, 1486, 1487, 1488, 1489, 1490, 1491, 1484, 1485, 1494, 1495, 1496, 1497, 1498, 1492, 1493, 3542, 1502, 3543, 3544, 1499, 1500, 1501, 1503, 1504, 1505, 3554, 1506, 1509, 1507, 1508, 1510, 1511, 1512, 3563, 1513, 1514, 1515, 3568, 1516, 3573, 1517, 1518, 1519, 1588, 1590, 1591, 1592, 1593, 1594, 1595, 1596, 1597, 1598, 1599, 1600, 1601, 1602, 1603, 1604, 1605, 1606, 1607, 1608, 1609, 1610, 1611, 1612, 1613, 1614, 1615, 1616, 1617, 1618, 1619, 1620, 1621, 1622, 1623, 1624, 3674, 3675, 1630, 1631, 1632, 1633, 1634, 1635, 1636, 3685, 1638, 1639, 1640, 1641, 1642, 1643, 1644, 1645, 3694, 1647, 1648, 1649, 1650, 1651, 1652, 1653, 1654, 1646, 1691, 3753, 3763, 3781, 3782, 3784, 3785, 3794, 3804, 3839, 3840, 3850, 3859, 1856, 3918, 3928, 3946, 3947, 3949, 3950, 3959, 3969, 4004, 4005, 4015, 4024, 4029, 4037, 4045])
