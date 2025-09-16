@@ -261,14 +261,14 @@ class AdaptiveLASSO:
 
         self.set_default_d(d)
 
+        nonancols = np.isnan(X).sum(axis=0)==0
+        noinfcols = np.isinf(X).sum(axis=0)==0
+        valcols = np.logical_and(nonancols, noinfcols)
         if np.abs(self.gamma)<1e-10:
             beta_hat = np.ones(X.shape[1])
             w_hat = np.ones(X.shape[1])
             X_star_star = X.copy()
         else:
-            nonancols = np.isnan(X).sum(axis=0)==0
-            noinfcols = np.isinf(X).sum(axis=0)==0
-            valcols = np.logical_and(nonancols, noinfcols)
 
             X_valcols = X[:, valcols]
             beta_hat, _, _, _ = np.linalg.lstsq(X_valcols, y, rcond=self.rcond)
