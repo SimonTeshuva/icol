@@ -22,6 +22,131 @@ def LL(res):
     n = len(res)
     return n*np.log(np.sum(res**2)/n)
 
+def initialize_ols(D, y, init_idx):
+    """
+    Fit initial OLS solution on selected columns of D.
+    
+    Parameters
+    ----------
+    D : (n, d) ndarray
+        Full dictionary matrix.
+    y : (n,) ndarray
+        Response vector.
+    init_idx : list[int]
+        Indices of columns from D to use initially.
+    
+    Returns
+    -------
+    beta : (p,) ndarray
+        OLS coefficients for selected columns.
+    A_inv : (p, p) ndarray
+        Inverse Gram matrix for selected columns.
+    XT : (p, n) ndarray
+        Transposed design matrix of selected columns.
+    active_idx : list[int]
+        Current indices of D included in the model.
+    """
+    X = D[:, init_idx]
+    A = X.T @ X
+    try: 
+        A_inv = np.linalg.inv(A)
+    except np.linalg.LinAlgError:
+        A_inv = np.linalg.pinv(A)
+    beta = A_inv @ (X.T @ y)
+    XT = X.T
+    return beta, A_inv, XT, list(init_idx)
+
+def sweep_update_from_D(beta, A_inv, XT, active_idx, D, y, new_idx):
+    # Generated with ChatGPT using the commands;
+    # 1. write me a function which takes in an n by p dimension matrix X, for which we already have an OLS solution, beta.
+    #  Additionally, a second input is a data matrix Z with n rows and q columns. 
+    # Add the Z matrix of columns to the OLS solution using SWEEP
+    # 2. Are we also able to efficiently update the gram and its inverse with this procedure for X augmented with Z
+    # 3. Ok, imagine that I need to update my SWEEP solution multiple times.
+    #  Adjust the inputs and return values so that everything can be used again in the next SWEEP update.
+    #  Then update the function to make use of these previous computations
+    # 4. Lets make some changes for the sake of indexing. Imagine that we have a large matrix D, with d columns.
+    # Through some selection procedure we select p of those columns to form an initial OLS solution.
+    # We then iteratively select p new columns and incorporate those into the ols solution using sweep. 
+    # Update the code to reflect this change while also tracking the indices of columns in the original D matrix 
+    # and their mapping to the respective betas.
+
+    """
+    Update OLS solution by adding new columns from D.
+    
+    Parameters
+    ----------
+    beta : (p,) ndarray
+        Current OLS coefficients.
+    A_inv : (p, p) ndarray
+        Inverse Gram matrix for current features.
+    XT : (p, n) ndarray
+        Transposed design matrix for current features.
+    active_idx : list[int]
+        Current indices of columns in D that are in the model.
+    D : (n, d) ndarray
+        Full dictionary matrix.
+    y : (n,) ndarray
+        Response vector.
+    new_idx : list[int]
+        Indices of new columns in D to add.
+    
+    Returns
+    -------
+    beta_new : (p+q,) ndarray
+        Updated OLS coefficients.
+    A_tilde_inv : (p+q, p+q) ndarray
+        Updated inverse Gram matrix.
+    XT_new : (p+q, n) ndarray
+        Updated design matrix transpose.
+    active_idx_new : list[int]
+        Updated indices of active columns in D.
+    """
+    p = beta.shape[0]
+    Z = D[:, new_idx]    # n x q
+    q = Z.shape[1]
+
+    # Cross products
+    B = XT @ Z                # p x q
+    C = Z.T @ Z               # q x q
+    yZ = Z.T @ y              # q x 1
+
+    # Schur complement
+    S = C - B.T @ (A_inv @ B)
+
+    # Solve for new coefficients (numerically stable)
+    rhs = yZ - B.T @ beta
+    try:
+        beta_Z = np.linalg.solve(S, rhs)
+    except np.linalg.LinAlgError:
+        beta_Z = np.linalg.pinv(S) @ rhs
+
+    # Update old coefficients
+    beta_X_new = beta - A_inv @ (B @ beta_Z)
+    beta_new = np.concatenate([beta_X_new, beta_Z])
+
+    # Update Gram inverse
+    try: 
+        S_inv = np.linalg.inv(S)  # small q x q
+    except np.linalg.LinAlgError:
+        S_inv = np.linalg.pinv(S)
+
+    top_left = A_inv + A_inv @ B @ S_inv @ B.T @ A_inv
+    top_right = -A_inv @ B @ S_inv
+    bottom_left = -S_inv @ B.T @ A_inv
+    bottom_right = S_inv
+
+    A_tilde_inv = np.block([
+        [top_left, top_right],
+        [bottom_left, bottom_right]
+    ])
+
+    # Update XT and active indices
+    XT_new = np.vstack([XT, Z.T])
+    active_idx_new = active_idx + list(new_idx)
+
+    return beta_new, A_tilde_inv, XT_new, active_idx_new
+
 IC_DICT = {
     'AIC': lambda res, k: LL(res) + 2*k,
     'HQIC': lambda res, k: LL(res) + np.log(np.log(len(res)))*k,
@@ -169,7 +294,7 @@ class PolynomialFeaturesICL:
     
     def get_feature_names_out(self):
         return self.PolynomialFeatures.get_feature_names_out()
-    
+
 class BSS:
     def __init__(self):
         pass
@@ -233,7 +358,90 @@ class BSS:
         beta_ret = np.zeros(p)
         beta_ret[list(best_comb)] = beta.reshape(1, -1)
         return beta_ret
-                    
+
+class EfficientAdaptiveLASSO:
+    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0):
+        self.gamma = gamma
+        self.fit_intercept = fit_intercept
+        self.default_d = default_d
+        self.rcond=rcond
+        self.alpha=alpha
+        self.A_inv = None
+        self.XT = None
+        self.beta_ols = None
+        self.active_idx = None
+
+    def __str__(self):
+        return ('EffAda' if self.gamma != 0 else '') + ('LASSO') + ('(gamma={0})'.format(self.gamma) if self.gamma != 0 else '')
+    
+    def __repr__(self):
+        return self.__str__()
+    
+    def get_params(self, deep=False):
+        return {'gamma': self.gamma,
+                'fit_intercept': self.fit_intercept,
+                'default_d': self.default_d,
+                'rcond': self.rcond}
+    
+    def set_default_d(self, d):
+        self.default_d = d
+
+    def __call__(self, X, y, d, idx_old = None, idx_new=None, verbose=False):
+
+        self.set_default_d(d)
+        nonancols = np.isnan(X).sum(axis=0)==0
+        noinfcols = np.isinf(X).sum(axis=0)==0
+        valcols = np.logical_and(nonancols, noinfcols)
+        idx_ala = list(idx_new) + list(idx_old)
+
+        if np.abs(self.gamma)<1e-10:
+            beta_ols = np.ones(X.shape[1])
+            w_hat = np.ones(X.shape[1])
+            X_star_star = X.copy()
+        else:
+            X_valcols = X[:, valcols]
+            if not idx_old:
+                self.beta_ols, self.A_inv, self.XT, self.active_idx = initialize_ols(X_valcols, y, init_idx=idx_new)
+            else:
+                self.beta_ols, self.A_inv, self.XT, self.active_idx = sweep_update_from_D(beta = self.beta_ols, A_inv=self.A_inv,
+                                                                                          XT=self.XT, active_idx=self.active_idx, D=X, y=y, 
+                                                                                          new_idx=idx_new)
+
+            w_hat = 1/np.power(np.abs(self.beta_ols), self.gamma)
+            X_star_star = np.zeros_like(X_valcols[:, idx_ala])
+            for j in range(X_star_star.shape[1]): # vectorise
+                X_j = X_valcols[:, j]/w_hat[j]
+                X_star_star[:, j] = X_j
+
+        _, _, coefs, _ = lars_path(X_star_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
+        # alphas, active, coefs = lars_path(X_star_star, y.ravel(), method='lasso')
+        try:           
+            beta_hat_star_star = coefs[:, d]
+        except IndexError: # in the event that a solution with d components cant be found, use the next largest. 
+            beta_hat_star_star = coefs[:, -1]
+
+        beta_hat_star_n_old_new = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+#        beta_hat_star_n = np.zeros(X.shape[1])
+#        beta_hat_star_n[idx_ala] = beta_hat_star_n_old_new
+
+#        beta_hat_star_n[valcols] = beta_hat_star_n_valcol
+#        ret = beta_hat_star_n.reshape(1, -1).squeeze()
+        return beta_hat_star_n_old_new.squeeze()
+    
+    def fit(self, X, y, verbose=False):
+        self.mu = y.mean() if self.fit_intercept else 0            
+        beta = self.__call__(X=X, y=y-self.mu, d=self.default_d, verbose=verbose)
+        self.beta = beta.reshape(-1, 1)
+
+    def predict(self, X):
+        return np.dot(X, self.beta) + self.mu
+    
+    def s_max(self, k, n, p, c1=1, c0=0):
+        if self.gamma==0:
+            return c1*(p/(k**2)) + c0
+        else:
+            return c1*min(np.power(p, 1/2)/k, np.power(p*n, 1/3)/k) + c0
+
 class AdaptiveLASSO:
     def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0):
         self.gamma = gamma
@@ -467,11 +675,14 @@ class ICL:
             if verbose: print('.', end='')
 
             p, sis_i = self.sis(X=X, res=res, pool=list(pool_), verbose=verbose)
+            pool_old = deepcopy(pool_)
             pool_.update(sis_i)
             pool_lst = list(pool_)
-            
             if track_pool: self.pool = pool_lst
-            beta_i = self.so(X=X[:, pool_lst], y=y, d=i+1, verbose=verbose)
+            if str(self.so) == 'EffAdaLASSO(gamma=1)':
+                beta_i = self.so(X=X, y=y, d=i+1, idx_old = list(pool_old), idx_new=sis_i, verbose=verbose)
+            else:
+                beta_i = self.so(X=X[:, pool_lst], y=y, d=i+1, verbose=verbose)
 
             beta = np.zeros(shape=(X.shape[1]))
             beta[pool_lst] = beta_i
@@ -801,85 +1012,70 @@ class FeatureExpansion:
             return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
         
 if __name__ == "__main__":
-    # n = 1000
-    # X = np.eye(n)
-    # X[-1, -1] = 1e-300  # Tiny singular value
-    # y=np.ones(n)
-
-    # ala = AdaptiveLASSO(gamma=1, fit_intercept=False)
-    # coef = ala(X, y, d=X.shape[1], verbose=True)
-    # print(coef)
-    # # print(X @ coef)
-
-    # #######
-    # testing feature expansion here
-
     import os
     import pandas as pd
+    X = np.random.random(size=(10, 5))
+    y = np.random.random(size=(10))
+    beta_ols, _, _, _ = np.linalg.lstsq(X, y)
+    print(beta_ols)
+    beta_sweep, A_inv, XT, active_idx = initialize_ols(D = X, y=y, init_idx=[0])
+    print(beta_sweep)
+    for i in range(1, X.shape[1]):
+        beta_sweep, A_inv, XT, active_idx = sweep_update_from_D(beta=beta_sweep, A_inv=A_inv, XT=XT, active_idx=active_idx, D=X, y=y, new_idx=[i])
+        print(beta_sweep)
 
-    root = '/'.join(os.getcwd().split('/')[:-1])
+    # root = '/'.join(os.getcwd().split('/')[:-1])
     	
-    f = os.path.join(root, 'ExperimentCode', 'Input', 'data_bandgap.csv')
-    df = pd.read_csv(f)
-    target = 'bg_hse06 (eV)'
-    drop = ['material']
-    y = df[target].values
-    X = df.drop(columns=drop+[target])   
-    feature_names = X.columns
-    X = X.values
+    # f = os.path.join(root, 'ExperimentCode', 'Input', 'data_bandgap.csv')
+    # df = pd.read_csv(f)
+    # target = 'bg_hse06 (eV)'
+    # drop = ['material']
+    # y = df[target].values
+    # X = df.drop(columns=drop+[target])   
+    # feature_names = X.columns
+    # X = X.values
 
-    rung = 2
-    size=0.05
+    # rung = 2
+    # size= 1
+
+    # unary = ['sin', 'cos', 'log', 'exp', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
+    # binary = ['mul', 'add', 'sub', 'div', 'abs_diff']
+    # unary = [(op, range(rung)) for op in unary]
+    # binary = [(op, range(1)) for op in binary]
+    # ops = unary + binary    
+
+    # fe = FeatureExpansion(rung=rung, ops=ops)
+    # spnames, names, X_ = fe.expand(X=X, names=feature_names, verbose=True)
+
+    # # n,p_ = X_.shape
+    # n,p = X.shape
+    # sampler = BOOTSTRAP(X=X, y=y, random_state=0)
+    # idx, out = sampler.sample(int(size*n), ret_idx=True)
+
+    # X_train, y_train = X_[idx], y[idx]
+    # X_test, y_test = X_[out], y[out]
+
+    # s_max = 3000
+    # s = 1
+
+    # while s < s_max:
+    #     print('s={0}'.format(s))
+    #     print('Efficient Adaptive Lasso')
+    #     icol = ICL(s=s, so=EfficientAdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=False)
+    #     start = time()
+    #     icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False)
+    #     fit_time = time() - start
+    #     print(fit_time)
+    #     y_hat_test = icol.predict(X_test)
 
 
-    unary = ['sin', 'cos', 'log', 'exp', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
-    binary = ['mul', 'div', 'add', 'sub', 'abs_diff']
-    binary = ['mul', 'div', 'add', 'sub', 'abs_diff']
-    unary = [(op, range(rung)) for op in unary]
-    binary = [(op, range(1)) for op in binary]
-    ops = unary + binary    
+    #     print('Regular Adaptive Laso')
+    #     icol = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=True)
+    #     start = time()
+    #     icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False)
+    #     fit_time = time() - start
+    #     print(fit_time)
 
-    fe = FeatureExpansion(rung=rung, ops=ops)
-    spnames, names, X_ = fe.expand(X=X, names=feature_names, verbose=True)
+    #     s *= 2
 
-    # n,p_ = X_.shape
-    n,p = X.shape
-    sampler = BOOTSTRAP(X=X, y=y, random_state=0)
-    idx, out = sampler.sample(int(size*n), ret_idx=True)
-
-    X_train, y_train = X_[idx], y[idx]
-    X_test, y_test = X_[out], y[out]
-
-    s_max = 3000
-    s = 1
-
-    while s < s_max:
-        icol = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=False)
-        icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False, val_size=0.2)
-        y_hat_test = icol.predict(X_test)
-        print('Not optimizing k')
-        print(icol.__str__())
-        print(icol.__repr__())
-        print(rmse(y_test, y_hat_test))
-
-
-        icol = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=True)
-        icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False, val_size=0.2)
-        y_hat_test = icol.predict(X_test)
-        print('with optimizing k')
-        print(icol.__str__())
-        print(icol.__repr__())
-        print(rmse(y_test, y_hat_test))
-
-        s *= 2
-
-        input()
-
-    # idx1 = np.array([8, 3081, 3084, 530, 1049, 1052, 1054, 1059, 3108, 3110, 2088, 555, 1068, 558, 559, 1073, 3121, 568, 2108, 1092, 75, 78, 2647, 1113, 1114, 3674, 604, 3675, 3166, 2658, 1122, 3685, 1638, 616, 2153, 3694, 3182, 113, 1142, 634, 126, 644, 1156, 1159, 1161, 1163, 3212, 1165, 2701, 3213, 3214, 1169, 659, 662, 663, 3224, 665, 1179, 156, 1691, 1184, 3233, 675, 3753, 681, 3246, 3763, 3256, 2750, 191, 1215, 2753, 1218, 1220, 3781, 198, 3782, 3784, 1225, 3785, 721, 1234, 3794, 724, 725, 3282, 1239, 3804, 3292, 734, 3302, 2793, 1258, 1259, 234, 1265, 247, 3319, 3320, 3321, 3323, 3324, 3839, 3840, 770, 1283, 1285, 1286, 3333, 2823, 3850, 3343, 3859, 3347, 283, 800, 2857, 810, 2860, 1325, 1328, 3377, 1330, 3378, 3379, 1335, 825, 828, 829, 3389, 831, 1344, 1856, 2369, 1349, 3398, 841, 1353, 3918, 846, 1361, 338, 3411, 344, 3928, 3421, 354, 2915, 2918, 3946, 3947, 3949, 3950, 886, 3959, 3447, 889, 890, 3969, 3457, 899, 3467, 2958, 399, 922, 412, 3484, 3485, 3486, 3488, 3489, 4004, 933, 4005, 3498, 2988, 4015, 435, 3508, 439, 4024, 3512, 4029, 4037, 4045, 3023, 465, 3026, 3542, 3543, 984, 473, 3544, 990, 3554, 995, 3563, 1006, 3568, 3573])
-    # idx2 = np.array([8, 2088, 1637, 2108, 75, 78, 2153, 113, 126, 156, 191, 198, 234, 247, 283, 2369, 4418, 338, 344, 354, 399, 412, 435, 439, 465, 473, 530, 555, 558, 559, 568, 2647, 604, 2658, 616, 634, 644, 2701, 659, 662, 663, 665, 675, 681, 2750, 2753, 721, 724, 725, 734, 2793, 770, 2823, 800, 2857, 810, 2860, 825, 828, 829, 831, 841, 846, 2915, 2918, 886, 889, 890, 899, 2958, 922, 933, 2988, 3023, 3026, 984, 1417, 990, 1418, 995, 1419, 1006, 3081, 3084, 1049, 1052, 1054, 1059, 3108, 3110, 1068, 1073, 3121, 1436, 1437, 1438, 1092, 1440, 1104, 1441, 1113, 1114, 3166, 1122, 3182, 1142, 1156, 1159, 1161, 1163, 3212, 1165, 3213, 3214, 1169, 3224, 1179, 1184, 3233, 3246, 3256, 1215, 1218, 1220, 1225, 1234, 3282, 1239, 3292, 3302, 1258, 1259, 1265, 3319, 3320, 3321, 3323, 3324, 1283, 1285, 1286, 3333, 3343, 3347, 1482, 1325, 1328, 3377, 1330, 3378, 3379, 1335, 3389, 1344, 1349, 3398, 1353, 1361, 3411, 3421, 1382, 1383, 1384, 1385, 1386, 1387, 1388, 1389, 1390, 1391, 1392, 1393, 1394, 1395, 1396, 1397, 1398, 3447, 1399, 1400, 1401, 1402, 1403, 1405, 1404, 1406, 1407, 3457, 1408, 1409, 1410, 1413, 1414, 1411, 1412, 1415, 1416, 3467, 1420, 1421, 1422, 1423, 1424, 1425, 1426, 1427, 1428, 1429, 1430, 1431, 1432, 1433, 1434, 1435, 3484, 3485, 3486, 1439, 3488, 3489, 1442, 1443, 1444, 1445, 1446, 1447, 1448, 1449, 1450, 3498, 1452, 1451, 1453, 1455, 1454, 1456, 1457, 1459, 1460, 1458, 3508, 1463, 1464, 1465, 1461, 1462, 3512, 1466, 1467, 1468, 1469, 1470, 1471, 1472, 1474, 1473, 1475, 1476, 1477, 1478, 1479, 1480, 1483, 1481, 1486, 1487, 1488, 1489, 1490, 1491, 1484, 1485, 1494, 1495, 1496, 1497, 1498, 1492, 1493, 3542, 1502, 3543, 3544, 1499, 1500, 1501, 1503, 1504, 1505, 3554, 1506, 1509, 1507, 1508, 1510, 1511, 1512, 3563, 1513, 1514, 1515, 3568, 1516, 3573, 1517, 1518, 1519, 1588, 1590, 1591, 1592, 1593, 1594, 1595, 1596, 1597, 1598, 1599, 1600, 1601, 1602, 1603, 1604, 1605, 1606, 1607, 1608, 1609, 1610, 1611, 1612, 1613, 1614, 1615, 1616, 1617, 1618, 1619, 1620, 1621, 1622, 1623, 1624, 3674, 3675, 1630, 1631, 1632, 1633, 1634, 1635, 1636, 3685, 1638, 1639, 1640, 1641, 1642, 1643, 1644, 1645, 3694, 1647, 1648, 1649, 1650, 1651, 1652, 1653, 1654, 1646, 1691, 3753, 3763, 3781, 3782, 3784, 3785, 3794, 3804, 3839, 3840, 3850, 3859, 1856, 3918, 3928, 3946, 3947, 3949, 3950, 3959, 3969, 4004, 4005, 4015, 4024, 4029, 4037, 4045])
-    # idx3 = np.array([8, 1141, 2088, 1637, 2108, 75, 78, 2153, 113, 126, 156, 191, 198, 234, 247, 283, 2369, 4418, 338, 344, 354, 399, 412, 435, 439, 465, 473, 530, 555, 558, 559, 568, 2647, 604, 2658, 616, 634, 644, 2701, 659, 662, 663, 665, 675, 681, 2750, 2753, 721, 724, 725, 734, 2793, 770, 2823, 800, 2857, 810, 2860, 825, 828, 829, 831, 841, 846, 2915, 2918, 1521, 886, 889, 890, 899, 2958, 922, 933, 2988, 3023, 3026, 984, 1417, 990, 1418, 995, 1419, 1522, 1006, 3081, 3084, 1049, 1052, 1054, 1059, 3108, 3110, 1068, 1073, 3121, 1436, 1437, 1438, 1092, 1440, 1104, 1106, 1441, 1108, 1109, 1110, 1111, 1112, 1113, 1114, 1115, 1116, 1117, 3166, 1119, 1120, 1121, 1122, 1523, 1123, 1124, 1125, 1126, 1127, 1129, 1128, 1130, 1131, 1132, 3182, 1133, 1134, 1135, 1136, 1137, 1138, 1139, 1142, 1140, 1144, 1145, 1146, 1147, 1148, 1149, 1150, 1151, 1152, 1153, 1154, 1155, 1156, 1157, 1158, 1159, 1160, 1161, 1162, 1163, 3212, 1165, 3213, 3214, 1168, 1169, 1170, 1171, 1172, 1173, 1174, 1175, 3224, 1177, 1178, 1179, 1180, 1181, 1182, 1183, 1184, 3233, 1186, 1187, 1188, 1189, 1190, 1191, 1192, 1193, 1194, 1195, 1196, 1197, 3246, 1198, 1199, 1200, 1201, 1202, 1203, 1204, 1205, 1206, 3256, 1207, 1208, 1209, 1212, 1213, 1214, 1215, 1216, 1217, 1218, 1219, 1220, 1221, 1222, 1223, 1224, 1225, 1226, 1227, 1228, 1229, 1230, 1231, 1232, 1233, 1234, 3282, 1236, 1237, 1238, 1239, 1235, 1241, 1240, 1242, 3292, 1524, 3302, 1258, 1259, 1265, 3319, 3320, 3321, 3323, 3324, 1283, 1285, 1286, 3333, 3343, 3347, 1482, 1325, 1328, 3377, 1330, 3378, 3379, 1331, 1332, 1335, 1336, 3389, 1526, 1344, 1349, 3398, 1353, 1361, 3411, 1525, 3421, 1118, 1378, 1379, 1380, 1381, 1382, 1383, 1384, 1385, 1386, 1387, 1388, 1389, 1390, 1391, 1392, 1393, 1394, 1395, 1396, 1397, 1398, 3447, 1399, 1400, 1401, 1402, 1403, 1405, 1404, 1406, 1407, 3457, 1408, 1409, 1410, 1413, 1414, 1411, 1412, 1415, 1416, 3467, 1420, 1421, 1422, 1423, 1424, 1425, 1426, 1427, 1428, 1429, 1430, 1431, 1432, 1433, 1434, 1435, 3484, 3485, 3486, 1439, 3488, 3489, 1442, 1443, 1444, 1445, 1446, 1447, 1448, 1449, 1450, 3498, 1452, 1451, 1453, 1455, 1454, 1456, 1457, 1459, 1460, 1458, 3508, 1463, 1464, 1465, 1461, 1462, 3512, 1466, 1467, 1468, 1469, 1470, 1471, 1472, 1474, 1473, 1475, 1476, 1477, 1478, 1479, 1480, 1483, 1481, 1486, 1487, 1488, 1489, 1490, 1491, 1484, 1485, 1494, 1495, 1496, 1497, 1498, 1492, 1493, 3542, 1502, 3543, 3544, 1499, 1500, 1501, 1503, 1504, 1505, 3554, 1506, 1509, 1507, 1508, 1510, 1511, 1512, 3563, 1513, 1514, 1515, 3568, 1516, 3573, 1517, 1518, 1519, 1520, 1530, 1531, 1532, 1533, 1534, 1535, 1536, 1537, 1538, 1539, 1540, 1541, 1542, 1543, 1544, 1545, 1546, 1547, 1548, 1549, 1550, 1551, 1529, 1528, 1527, 1552, 1553, 1554, 1555, 1559, 1560, 1561, 1562, 1563, 1564, 1565, 1566, 1567, 1568, 1569, 1570, 1571, 1572, 1573, 1574, 1575, 1576, 1577, 1578, 1579, 1580, 1581, 1582, 1583, 1584, 1585, 1586, 1587, 1588, 1589, 1590, 1591, 1592, 1593, 1594, 1595, 1596, 1597, 1598, 1599, 1600, 1601, 1602, 1603, 1604, 1605, 1606, 1607, 1608, 1609, 1610, 1611, 1612, 1613, 1614, 1615, 1616, 1617, 1618, 1619, 1620, 1621, 1622, 1623, 1624, 1625, 3674, 3675, 1628, 1629, 1630, 1631, 1632, 1633, 1634, 1635, 1636, 3685, 1638, 1639, 1640, 1641, 1642, 1643, 1644, 1645, 3694, 1647, 1648, 1649, 1650, 1651, 1652, 1653, 1654, 1646, 1143, 1556, 1557, 1691, 1558, 3753, 3763, 3781, 3782, 3784, 3785, 3794, 3804, 1164, 1166, 1167, 3839, 3840, 3850, 3859, 1176, 1856, 1185, 3918, 3928, 3946, 3947, 3949, 3950, 3959, 3969, 4004, 4005, 4015, 4024, 4029, 4037, 1210, 4045, 1211, 1626, 1627, 1107])
-    # idx4 = np.array([2048, 2049, 2050, 2051, 2052, 2053, 2054, 2055, 8, 2057, 2058, 2059, 2060, 2061, 2062, 2063, 2064, 2065, 2066, 2067, 2068, 2039, 2070, 2042, 1141, 2088, 1637, 2045, 2108, 75, 78, 2153, 2056, 113, 1244, 1245, 126, 1247, 156, 1254, 191, 198, 234, 247, 283, 1279, 1280, 1281, 1282, 1284, 2369, 4418, 1287, 338, 344, 354, 1295, 1299, 399, 412, 435, 439, 1313, 465, 473, 530, 1329, 555, 558, 559, 568, 2647, 604, 2658, 616, 634, 1348, 644, 1350, 2701, 1351, 659, 1352, 662, 663, 665, 1354, 675, 681, 2750, 2753, 1364, 721, 724, 725, 734, 2793, 1372, 1373, 1374, 770, 2823, 800, 2857, 810, 2860, 825, 828, 829, 831, 841, 846, 2915, 2918, 1521, 886, 889, 890, 899, 2958, 922, 933, 2988, 3023, 3026, 984, 1417, 990, 1418, 995, 1419, 1522, 1006, 3081, 3084, 1049, 1052, 1054, 1059, 3108, 3110, 1068, 1073, 3121, 1436, 1437, 1438, 1092, 1440, 1104, 1106, 1441, 1108, 1109, 1110, 1111, 1112, 1113, 1114, 1115, 1116, 1117, 3166, 1119, 1120, 1121, 1122, 1523, 1123, 1124, 1125, 1126, 1127, 1129, 1128, 1130, 1131, 1132, 3182, 1133, 1134, 1135, 1136, 1137, 1138, 1139, 1142, 1140, 1144, 1145, 1146, 1147, 1148, 1149, 1150, 1151, 1152, 1153, 1154, 1155, 1156, 1157, 1158, 1159, 1160, 1161, 1162, 1163, 3212, 1165, 3213, 3214, 1168, 1169, 1170, 1171, 1172, 1173, 1174, 1175, 3224, 1177, 1178, 1179, 1180, 1181, 1182, 1183, 1184, 3233, 1186, 1187, 1188, 1189, 1190, 1191, 1192, 1193, 1194, 1195, 1196, 1197, 3246, 1198, 1199, 1200, 1201, 1202, 1203, 1204, 1205, 1206, 3256, 1207, 1208, 1209, 1212, 1213, 1214, 1215, 1216, 1217, 1218, 1219, 1220, 1221, 1222, 1223, 1224, 1225, 1226, 1227, 1228, 1229, 1230, 1231, 1232, 1233, 1234, 3282, 1236, 1237, 1238, 1239, 1235, 1241, 1240, 1242, 3292, 1243, 1246, 1524, 1248, 1249, 1250, 1251, 1252, 1253, 3302, 1255, 1256, 1257, 1258, 1259, 1260, 1261, 1262, 1263, 1264, 1265, 1266, 1267, 1268, 1269, 1270, 3319, 3320, 3321, 1271, 3323, 3324, 1272, 1273, 1274, 1275, 1276, 1277, 1283, 1278, 1285, 1286, 3333, 1288, 1289, 1290, 1291, 1292, 1293, 1294, 3343, 1296, 1297, 1298, 3347, 1300, 1301, 1302, 1303, 1304, 1305, 1306, 1307, 1308, 1309, 1310, 1311, 1312, 1482, 1314, 1315, 1316, 1317, 1318, 1319, 1320, 1321, 1322, 1323, 1324, 1325, 1326, 1327, 1328, 3377, 1330, 3378, 3379, 1331, 1332, 1335, 1336, 1333, 1334, 1337, 1338, 3389, 1526, 1339, 1344, 1340, 1341, 1342, 1343, 1349, 3398, 1345, 1346, 1353, 1347, 1355, 1356, 1357, 1358, 1359, 1360, 1361, 1362, 3411, 1363, 1365, 1366, 1367, 1368, 1369, 1370, 1371, 1525, 3421, 1118, 1375, 1376, 1377, 1378, 1379, 1380, 1381, 1382, 1383, 1384, 1385, 1386, 1387, 1388, 1389, 1390, 1391, 1392, 1393, 1394, 1395, 1396, 1397, 1398, 3447, 1399, 1400, 1401, 1402, 1403, 1405, 1404, 1406, 1407, 3457, 1408, 1409, 1410, 1413, 1414, 1411, 1412, 1415, 1416, 3467, 1420, 1421, 1422, 1423, 1424, 1425, 1426, 1427, 1428, 1429, 1430, 1431, 1432, 1433, 1434, 1435, 3484, 3485, 3486, 1439, 3488, 3489, 1442, 1443, 1444, 1445, 1446, 1447, 1448, 1449, 1450, 3498, 1452, 1451, 1453, 1455, 1454, 1456, 1457, 1459, 1460, 1458, 3508, 1463, 1464, 1465, 1461, 1462, 3512, 1466, 1467, 1468, 1469, 1470, 1471, 1472, 1474, 1473, 1475, 1476, 1477, 1478, 1479, 1480, 1483, 1481, 1486, 1487, 1488, 1489, 1490, 1491, 1484, 1485, 1494, 1495, 1496, 1497, 1498, 1492, 1493, 3542, 1502, 3543, 3544, 1499, 1500, 1501, 1503, 1504, 1505, 3554, 1506, 1509, 1507, 1508, 1510, 1511, 1512, 3563, 1513, 1514, 1515, 3568, 1516, 3573, 1517, 1518, 1519, 1520, 1530, 1531, 1532, 1533, 1534, 1535, 1536, 1537, 1538, 1539, 1540, 1541, 1542, 1543, 1544, 1545, 1546, 1547, 1548, 1549, 1550, 1551, 1529, 1528, 1527, 1552, 1553, 1554, 1555, 1559, 1560, 1561, 1562, 1563, 1564, 1565, 1566, 1567, 1568, 1569, 1570, 1571, 1572, 1573, 1574, 1575, 1576, 1577, 1578, 1579, 1580, 1581, 1582, 1583, 1584, 1585, 1586, 1587, 1588, 1589, 1590, 1591, 1592, 1593, 1594, 1595, 1596, 1597, 1598, 1599, 1600, 1601, 1602, 1603, 1604, 1605, 1606, 1607, 1608, 1609, 1610, 1611, 1612, 1613, 1614, 1615, 1616, 1617, 1618, 1619, 1620, 1621, 1622, 1623, 1624, 1625, 3674, 3675, 1628, 1629, 1630, 1631, 1632, 1633, 1634, 1635, 1636, 3685, 1638, 1639, 1640, 1641, 1642, 1643, 1644, 1645, 3694, 1647, 1648, 1649, 1650, 1651, 1652, 1653, 1654, 1646, 1143, 1655, 1656, 1657, 1556, 1557, 1691, 1558, 3753, 3763, 3781, 3782, 3784, 3785, 3794, 3804, 1164, 1166, 1167, 3839, 3840, 3850, 3859, 1176, 1856, 1185, 3918, 3928, 3946, 3947, 3949, 3950, 3959, 3969, 1952, 1953, 1954, 1955, 4004, 4005, 1958, 1956, 1957, 1959, 1960, 4015, 4024, 4029, 4037, 1210, 4045, 1211, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030, 2031, 2032, 2033, 2034, 2035, 2036, 1626, 2037, 2038, 2040, 2041, 1627, 2043, 2044, 1107, 2046, 2047])
-    # idx_all = [idx1, idx2, idx3, idx4]
-    # for i, idx in enumerate(idx_all):
-    #     X_train[:, idx]
-    #     print(np.isnan(X).sum(axis=0).sum(), np.isinf(X).sum(axis=0).sum())
+    #     input()
