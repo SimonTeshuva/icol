@@ -530,7 +530,7 @@ class LARS:
         return {'default_d': self.default_d}
 
     def __call__(self, X, y, d, verbose=False):
-        self.lars = Lars(fit_intercept=False, verbose=verbose, n_nonzero_coefs=d, copy_X=True)
+        self.lars = Lars(fit_intercept=False, fit_path=False, verbose=verbose, n_nonzero_coefs=d, copy_X=True)
         self.lars.fit(X, y)
         return self.lars.coef_
 
