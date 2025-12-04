@@ -8,7 +8,7 @@ from itertools import combinations, permutations
 import numpy as np
 import sympy as sp
 
-from sklearn.linear_model import lars_path, Ridge
+from sklearn.linear_model import lars_path, Ridge, Lars
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.base import clone
 from sklearn.model_selection import train_test_split
@@ -513,6 +513,27 @@ class AdaptiveLASSO:
         else:
             return c1*min(np.power(p, 1/2)/k, np.power(p*n, 1/3)/k) + c0
 
+class LARS:
+    def __init__(self, default_d=None):
+        self.default_d=default_d
+    
+    def __repr__(self):
+        return 'Lars'
+
+    def __str__(self):
+        return 'Lars'
+
+    def set_default_d(self, default_d):
+        self.default_d = default_d
+
+    def get_params(self, deep=False):
+        return {'default_d': self.default_d}
+
+    def __call__(self, X, y, d, verbose=False):
+        self.lars = Lars(fit_intercept=False, verbose=verbose, n_nonzero_coefs=d, copy_X=True)
+        self.lars.fit(X, y)
+        return self.lars.coef_
+
 class ThresholdedLeastSquares:
     def __init__(self, default_d=None):
         self.default_d=default_d
@@ -1014,15 +1035,22 @@ class FeatureExpansion:
 if __name__ == "__main__":
     import os
     import pandas as pd
-    X = np.random.random(size=(10, 5))
-    y = np.random.random(size=(10))
-    beta_ols, _, _, _ = np.linalg.lstsq(X, y)
-    print(beta_ols)
-    beta_sweep, A_inv, XT, active_idx = initialize_ols(D = X, y=y, init_idx=[0])
-    print(beta_sweep)
-    for i in range(1, X.shape[1]):
-        beta_sweep, A_inv, XT, active_idx = sweep_update_from_D(beta=beta_sweep, A_inv=A_inv, XT=XT, active_idx=active_idx, D=X, y=y, new_idx=[i])
-        print(beta_sweep)
+    X = np.random.random(size=(50000, 10))
+    y = X[:, 0] - X[:, 1] + 2*X[:, 2] - 2*X[:, 3] + 3*X[:, 4]
+    d = 5
+    lars = LARS()
+    tls = ThresholdedLeastSquares()
+    c = lars(X, y, d)
+    c2 = tls(X, y, d)
+    print(c)
+    print(c2)
+    # beta_ols, _, _, _ = np.linalg.lstsq(X, y)
+    # print(beta_ols)
+    # beta_sweep, A_inv, XT, active_idx = initialize_ols(D = X, y=y, init_idx=[0])
+    # print(beta_sweep)
+    # for i in range(1, X.shape[1]):
+    #     beta_sweep, A_inv, XT, active_idx = sweep_update_from_D(beta=beta_sweep, A_inv=A_inv, XT=XT, active_idx=active_idx, D=X, y=y, new_idx=[i])
+    #     print(beta_sweep)
 
     # root = '/'.join(os.getcwd().split('/')[:-1])
     	
