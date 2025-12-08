@@ -908,10 +908,11 @@ class FeatureExpansion:
             names = ['x_{0}'.format(i) for i in range(X.shape[1])]
         
         if check_pos == False:
-            symbols = sp.symbols(' '.join(name for name in names))
+            symbols = sp.symbols(' '.join(name.replace(' ', '.') for name in names))
         else:
             symbols = []
             for i, name in enumerate(names):
+                name = name.replace(' ', '.')
                 if np.all(X[:, i] > 0):
                     sym = sp.symbols(name, real=True, positive=True)
                 else:
@@ -1047,23 +1048,26 @@ class FeatureExpansion:
 if __name__ == "__main__":
     import os
     import pandas as pd
-    X = np.random.randint(low=1, high=10, size=(100, 20))
-    y = X
-    d = 5
-    names = ['X_{0}'.format(i) for i in range(X.shape[1])]
-    rung = 2
-    unary = ['sin', 'cos', 'log', 'exp', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
-#    binary = ['mul', 'div', 'add', 'sub', 'abs_diff']
-    binary = ['mul', 'div', 'abs_diff', 'sub', 'add']
-    unary  = [(op, range(rung)) for op in unary]
-    binary = [(op, range(1)) for op in binary]
-    ops = unary + binary
+    indir = os.path.join(os.getcwd(), 'Input', 'data_bandgap.csv')
+    drop_cols = ['material']
+    target = 'bg_hse06 (eV)'
 
-    FE = FeatureExpansion(ops=ops, rung=10)
-    Phi_names, Phi_symbols, Phi = FE.expand(X=X, names=names, check_pos=True, verbose=True)
-    print(len(Phi_names))
-    Phi_names, Phi_symbols, Phi = FE.expand(X=X, names=names, check_pos=False, verbose=True)
-    print(len(Phi_names))
+    df = pd.read_csv(indir)
+    y = df[target].values
+    X = df.drop(columns=[target]+drop_cols)
+    names = X.columns
+    X = X.values
+
+    rung = 2
+    small = ['sin', 'cos', 'log', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'inv']
+    big = ['exp', 'six_pow', 'mul', 'div', 'abs_diff', 'sub', 'add']
+    small  = [(op, range(rung)) for op in small]
+    big = [(op, range(1)) for op in big]
+    ops = small+big
+
+    FE = FeatureExpansion(rung=rung, ops=ops)
+    Phi_names, Phi_symbols, Phi_ = FE.expand(X=X, names=names, check_pos=True, verbose=True)
+
     
     # beta_ols, _, _, _ = np.linalg.lstsq(X, y)
     # print(beta_ols)
