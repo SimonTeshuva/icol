@@ -902,11 +902,23 @@ class FeatureExpansion:
         
         return symbols[unique_original_order], names[unique_original_order], X[:, unique_original_order]
     
-    def expand(self, X, names=None, verbose=False, f=None):
+    def expand(self, X, names=None, verbose=False, f=None, check_pos=False):
         n, p = X.shape
         if (names is None) or (len(names) != p):
             names = ['x_{0}'.format(i) for i in range(X.shape[1])]
-        symbols = np.array(sp.symbols(' '.join(name for name in names)))
+        
+        if check_pos == False:
+            symbols = sp.symbols(' '.join(name for name in names))
+        else:
+            symbols = []
+            for i, name in enumerate(names):
+                if np.all(X[:, i] > 0):
+                    sym = sp.symbols(name, real=True, positive=True)
+                else:
+                    sym = sp.symbols(name, real=True)               
+                symbols.append(sym)
+
+        symbols = np.array(symbols)
         names = np.array(names)
         
         if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung, verbose=verbose>2)))
@@ -1035,15 +1047,24 @@ class FeatureExpansion:
 if __name__ == "__main__":
     import os
     import pandas as pd
-    X = np.random.random(size=(50000, 10))
-    y = X[:, 0] - X[:, 1] + 2*X[:, 2] - 2*X[:, 3] + 3*X[:, 4]
+    X = np.random.randint(low=1, high=10, size=(100, 20))
+    y = X
     d = 5
-    lars = LARS()
-    tls = ThresholdedLeastSquares()
-    c = lars(X, y, d)
-    c2 = tls(X, y, d)
-    print(c)
-    print(c2)
+    names = ['X_{0}'.format(i) for i in range(X.shape[1])]
+    rung = 2
+    unary = ['sin', 'cos', 'log', 'exp', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
+#    binary = ['mul', 'div', 'add', 'sub', 'abs_diff']
+    binary = ['mul', 'div', 'abs_diff', 'sub', 'add']
+    unary  = [(op, range(rung)) for op in unary]
+    binary = [(op, range(1)) for op in binary]
+    ops = unary + binary
+
+    FE = FeatureExpansion(ops=ops, rung=10)
+    Phi_names, Phi_symbols, Phi = FE.expand(X=X, names=names, check_pos=True, verbose=True)
+    print(len(Phi_names))
+    Phi_names, Phi_symbols, Phi = FE.expand(X=X, names=names, check_pos=False, verbose=True)
+    print(len(Phi_names))
+    
     # beta_ols, _, _, _ = np.linalg.lstsq(X, y)
     # print(beta_ols)
     # beta_sweep, A_inv, XT, active_idx = initialize_ols(D = X, y=y, init_idx=[0])
