@@ -717,7 +717,7 @@ class ICL:
                     coef = beta[idx]
                     intercept_ = self.intercept_
                 coef = coef[0]
-                expr = ''.join([('+' if float(c) >= 0 else '') + str(np.round(float(c), 3)) + self.feature_names_[idx][q] for q, c in enumerate(coef)])
+                expr = ''.join([('+' if float(c) >= 0 else '') + str(np.round(float(c), 3)) + str(self.feature_names_[idx][q]) for q, c in enumerate(coef)])
                 if verbose: print('Model after {0} iterations: {1}'.format(i, expr))
 
                 self.intermediates[i, 0] = deepcopy(idx)
