@@ -1,7 +1,7 @@
 # icol
 ** Iterative Correlation Learning in Python **
 
-`icol` allows one to fit extremly sparse linear models from very high dimensional datasets in a computationally efficient manner. Given a feature transformation, it can also be used to fit Symbolic Regression models
+`icol` allows one to fit extremly sparse linear models from very high dimensional datasets in a computationally efficient manner. We also include two feature expansion methods, allowing icol to be used as a Symbolic Regression tool.
 
 ---
 
