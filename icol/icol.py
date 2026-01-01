@@ -607,7 +607,7 @@ class SIS:
         return best_corr, best_idxs
 
 class ICL:
-    def __init__(self, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, optimize_k=False):
+    def __init__(self, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, optimize_k=False, track_intermediates=False):
         self.s = s
         self.sis = SIS(n_sis=s)
         self.so = so
@@ -616,7 +616,8 @@ class ICL:
         self.normalize=normalize
         self.pool_reset = pool_reset
         self.optimize_k = optimize_k
-    
+        self.track_intermediates = track_intermediates
+
     def get_params(self, deep=False):
         return {'s': self.s,
                 'so': self.so,
@@ -636,7 +637,7 @@ class ICL:
             ret += [('+' if self.coef_[0, i] > 0 else '') + 
                     str(np.format_float_scientific(self.coef_[0, i], precision=prec, unique=False))
                       + ' (' + str(name) + ')' + '\n']
-        ret += ['+' + str(float(np.round(self.intercept_, prec)))]
+        ret += [('+' if self.intercept_>0 else '') + str(float(np.round(self.intercept_, prec)))]
         return ''.join(ret)
      
     def solve_norm_coef(self, X, y):
@@ -686,7 +687,7 @@ class ICL:
 
         pool_ = set()
         if track_pool: self.pool = []
-        if self.optimize_k: self.intermediates = np.empty(shape=(self.k, 5), dtype=object)
+        if self.optimize_k or self.track_intermediates: self.intermediates = np.empty(shape=(self.k, 5), dtype=object)
 
         res = y
         i = 0
@@ -708,7 +709,7 @@ class ICL:
             beta = np.zeros(shape=(X.shape[1]))
             beta[pool_lst] = beta_i
 
-            if self.optimize_k:
+            if self.optimize_k or self.track_intermediates:
                 idx = np.nonzero(beta)[0]
                 if self.normalize:
                     coef = (beta[idx].reshape(1, -1)*self.b_y/self.b_x[idx].reshape(1, -1))
@@ -736,7 +737,7 @@ class ICL:
             res = (y.reshape(1, -1) - (np.dot(X, beta).reshape(1, -1)+self.intercept_) ).T
 
             i += 1
-        if self.optimize_k: self.intermediates = self.intermediates[:, :i]
+        if self.optimize_k or self.track_intermediates: self.intermediates = self.intermediates[:, :i]
             
         if verbose: print()
         
@@ -800,8 +801,39 @@ class ICL:
         X_ = np.delete(X, self.bad_col, axis=1)
         return (np.dot(X_[:, self.beta_idx_], self.coef_.squeeze()) + self.intercept_).reshape(-1, 1)
 
+    def predict_ensemble(self, X):
+        y_hat = np.zeros(shape=(X.shape[0], self.k))
+        for k in range(self.k):
+            idx = self.intermediates[k, 0]
+            coef = self.intermediates[k, 1]
+            inter = self.intermediates[k, 2]
+            X_pred = np.delete(X, self.bad_col, axis=1)
+            y_hat[:, k]=(np.dot(X_pred[:, idx], coef) + inter).reshape(-1, 1).squeeze()
+        return y_hat
+    
+    def repr_ensemble(self, prec=3):
+        ret = []
+        for k in range(self.k):
+            idx = self.intermediates[k, 0]
+            coef = self.intermediates[k, 1]
+            inter = self.intermediates[k, 2]
+            feat = self.intermediates[k, 3]
+            model_k = []
+            for i, name in enumerate(feat):
+                model_k += [('+' if coef[i] > 0 else '') + 
+                        str(np.format_float_scientific(coef[i], precision=prec, unique=False))
+                        + ' (' + str(name) + ')' + '\n']
+            model_k += [('+' if inter > 0 else '')  + str(float(np.round(inter, prec)))]
+            model_k = ''.join(model_k)
+            ret += [model_k]
+        return ';\n\n'.join(ret)
+
     def score(self, X, y, scorer=rmse):
         return scorer(self.predict(X), y)
+
+    def score_ensemble(self, X, y):
+        y_hat_ens = self.predict_ensemble(X)
+        return np.mean((y_hat_ens - y.reshape(-1,1))**2, axis=0)
 
 class BOOTSTRAP:
     def __init__(self, X, y=None, random_state=None):
@@ -1046,89 +1078,25 @@ class FeatureExpansion:
             return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
         
 if __name__ == "__main__":
-    import os
-    import pandas as pd
-    indir = os.path.join(os.getcwd(), 'Input', 'data_bandgap.csv')
-    drop_cols = ['material']
-    target = 'bg_hse06 (eV)'
+    from sklearn.model_selection import train_test_split
+    random_state = 0
+    np.random.seed(random_state)
+    n, p = 10000, 10
+    X = np.random.random(size=(n,p))
+    y = np.sqrt(X[:, 0]) - np.cbrt(X[:, 0]) + X[:, 0]**3 - np.log(X[:, 0]) + np.sin(X[:, 0]) + 1
+    names = ['X_{0}'.format(i) for i in range(p)]
 
-    df = pd.read_csv(indir)
-    y = df[target].values
-    X = df.drop(columns=[target]+drop_cols)
-    names = X.columns
-    X = X.values
-
-    rung = 2
+    rung = 1
     small = ['sin', 'cos', 'log', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'inv']
-    big = ['exp', 'six_pow', 'mul', 'div', 'abs_diff', 'sub', 'add']
+    big = ['six_pow', 'exp', 'add', 'mul', 'div', 'abs_diff']
     small  = [(op, range(rung)) for op in small]
     big = [(op, range(1)) for op in big]
     ops = small+big
 
     FE = FeatureExpansion(rung=rung, ops=ops)
     Phi_names, Phi_symbols, Phi_ = FE.expand(X=X, names=names, check_pos=True, verbose=True)
-
-    
-    # beta_ols, _, _, _ = np.linalg.lstsq(X, y)
-    # print(beta_ols)
-    # beta_sweep, A_inv, XT, active_idx = initialize_ols(D = X, y=y, init_idx=[0])
-    # print(beta_sweep)
-    # for i in range(1, X.shape[1]):
-    #     beta_sweep, A_inv, XT, active_idx = sweep_update_from_D(beta=beta_sweep, A_inv=A_inv, XT=XT, active_idx=active_idx, D=X, y=y, new_idx=[i])
-    #     print(beta_sweep)
-
-    # root = '/'.join(os.getcwd().split('/')[:-1])
-    	
-    # f = os.path.join(root, 'ExperimentCode', 'Input', 'data_bandgap.csv')
-    # df = pd.read_csv(f)
-    # target = 'bg_hse06 (eV)'
-    # drop = ['material']
-    # y = df[target].values
-    # X = df.drop(columns=drop+[target])   
-    # feature_names = X.columns
-    # X = X.values
-
-    # rung = 2
-    # size= 1
-
-    # unary = ['sin', 'cos', 'log', 'exp', 'sqrt', 'cbrt', 'sq', 'cb', 'six_pow', 'inv']
-    # binary = ['mul', 'add', 'sub', 'div', 'abs_diff']
-    # unary = [(op, range(rung)) for op in unary]
-    # binary = [(op, range(1)) for op in binary]
-    # ops = unary + binary    
-
-    # fe = FeatureExpansion(rung=rung, ops=ops)
-    # spnames, names, X_ = fe.expand(X=X, names=feature_names, verbose=True)
-
-    # # n,p_ = X_.shape
-    # n,p = X.shape
-    # sampler = BOOTSTRAP(X=X, y=y, random_state=0)
-    # idx, out = sampler.sample(int(size*n), ret_idx=True)
-
-    # X_train, y_train = X_[idx], y[idx]
-    # X_test, y_test = X_[out], y[out]
-
-    # s_max = 3000
-    # s = 1
-
-    # while s < s_max:
-    #     print('s={0}'.format(s))
-    #     print('Efficient Adaptive Lasso')
-    #     icol = ICL(s=s, so=EfficientAdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=False)
-    #     start = time()
-    #     icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False)
-    #     fit_time = time() - start
-    #     print(fit_time)
-    #     y_hat_test = icol.predict(X_test)
-
-
-    #     print('Regular Adaptive Laso')
-    #     icol = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, optimize_k=True)
-    #     start = time()
-    #     icol.fit(X=X_train, y=y_train, feature_names=names, verbose=False)
-    #     fit_time = time() - start
-    #     print(fit_time)
-
-    #     s *= 2
-
-    #     input()
+    X_train, X_test, y_train, y_test = train_test_split(Phi_, y, test_size=0.2, random_state=random_state)
+    for i, s in enumerate([5]):
+        icl = ICL(s=s, so=AdaptiveLASSO(gamma=1), k=5, fit_intercept=True, normalize=True, optimize_k=False, track_intermediates=True)
+        icl.fit(X=X_train, y=y_train, feature_names = Phi_names, verbose=False)
+        print(icl.repr_ensemble())
