@@ -958,6 +958,7 @@ class FeatureExpansion:
         
         names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
         if not(f is None):
+            import pandas as pd
             df = pd.DataFrame(data=X, columns=names)
             df['y'] = y
             df.to_csv(f)
