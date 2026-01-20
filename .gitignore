@@ -20,6 +20,8 @@ Output/Dataset_Exps
 Output/Polynomial_CV_Exps
 Output/Polynomial_Oracle_Exps
 
+# Input datasets
+Input/
 
 # VS Code, PyCharm
 .vscode/

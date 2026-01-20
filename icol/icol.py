@@ -14,6 +14,7 @@ from sklearn.base import clone
 from sklearn.model_selection import train_test_split
 
 from sklearn.metrics import mean_squared_error
+from sklearn.linear_model import LogisticRegressionCV
 
 def rmse(y_true, y_pred):
     return mean_squared_error(y_true, y_pred, squared=False)
@@ -625,7 +626,8 @@ class ICL:
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
-                'self.optimize_k': self.optimize_k
+                'optimize_k': self.optimize_k,
+                'track_intermediates': self.track_intermediates
                 }
 
     def __str__(self):
@@ -693,7 +695,11 @@ class ICL:
         i = 0
         IC = np.infty
         while i < stopping:
-            self.intercept_ = np.mean(res).squeeze()
+            if self.fit_intercept: 
+                self.intercept_ = np.mean(res).squeeze()
+            else:
+                self.intercept_ = 0
+
             if verbose: print('.', end='')
 
             p, sis_i = self.sis(X=X, res=res, pool=list(pool_), verbose=verbose)
@@ -713,17 +719,20 @@ class ICL:
                 idx = np.nonzero(beta)[0]
                 if self.normalize:
                     coef = (beta[idx].reshape(1, -1)*self.b_y/self.b_x[idx].reshape(1, -1))
-                    intercept_ = self.a_y - coef.dot(self.a_x[idx])
+                    if self.fit_intercept:
+                        intercept_ = self.a_y - coef.dot(self.a_x[idx])
                 else:
                     coef = beta[idx]
-                    intercept_ = self.intercept_
-                coef = coef[0]
+                    if self.fit_intercept:
+                        intercept_ = self.intercept_
+                if len(coef.shape) > 1:
+                    coef = coef[0]
                 expr = ''.join([('+' if float(c) >= 0 else '') + str(np.round(float(c), 3)) + str(self.feature_names_[idx][q]) for q, c in enumerate(coef)])
                 if verbose: print('Model after {0} iterations: {1}'.format(i, expr))
 
                 self.intermediates[i, 0] = deepcopy(idx)
                 self.intermediates[i, 1] = coef # deepcopy(beta[idx])
-                self.intermediates[i, 2] = intercept_
+                self.intermediates[i, 2] = intercept_ if self.fit_intercept else 0
                 self.intermediates[i, 3] = self.feature_names_[idx]
                 self.intermediates[i, 4] = expr
 
@@ -742,7 +751,7 @@ class ICL:
         if verbose: print()
         
         self.beta_ = beta
-        self.intercept_ = np.mean(res).squeeze()
+        self.intercept_ = np.mean(res).squeeze() if self.fit_intercept else 0
 
         self.beta_idx_ = list(np.nonzero(self.beta_)[0])
         self.beta_sparse_ = self.beta_[self.beta_idx_]
@@ -957,6 +966,7 @@ class FeatureExpansion:
         if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung, verbose=verbose>2)))
         
         names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
+
         if not(f is None):
             import pandas as pd
             df = pd.DataFrame(data=X, columns=names)
@@ -1077,27 +1087,292 @@ class FeatureExpansion:
             if verbose: print('{0} features'.format(X.shape[1]))
 
             return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
+    
+class LOGISTIC_ICL:
+    def __init__(self, s, so, k, pool_reset=False, track_intermediates=False, max_iter=100, tol=1e-6, eps=1e-12, damping=0.5, prec=3):
+        self.s = s
+        self.so = so
+        self.k = k
+        self.pool_reset=pool_reset
+        self.track_intermediates = track_intermediates
+        self.max_iter = int(max_iter)
+        self.tol = float(tol)
+        self.eps = float(eps)
+        self.damping = float(damping)
+        self.prec = prec
+
+        self.icl = ICL(s=s, so=so, k=k, normalize=False, fit_intercept=False, optimize_k=True, track_intermediates=self.track_intermediates)
+        self.coef_ = None          # (p,)
+        self.intercept_ = 0.0      # scalar
+
+    def get_params(self, deep=False):
+        params = {
+            "s": self.s,
+            "so": self.so,
+            "k": self.k,
+            "pool_reset": self.pool_reset,
+            "track_intermediates": self.track_intermediates,
+            "max_iter": self.max_iter,
+            "tol": self.tol,
+            "eps": self.eps,
+            "damping": self.damping,
+            "prec": self.prec
+        }
+        if deep:
+            # expose inner ICL params using sklearn convention
+            for key, value in self.icl.get_params(deep=True).items():
+                params[f"icl__{key}"] = value
+
+        return params 
+
+    def decision_function(self, X):
+        X = np.asarray(X, dtype=float)
+        if self.coef_ is None:
+            raise ValueError("Model is not fitted yet.")
+        return X @ self.coef_ + self.intercept_
+
+    def predict_proba(self, X):
+        eta = self.decision_function(X)
+        p1 = self._sigmoid(eta)
+        p1 = np.clip(p1, self.eps, 1.0 - self.eps)
+        return np.column_stack([1.0 - p1, p1])
+
+    def predict(self, X, threshold=0.5):
+        return (self.predict_proba(X)[:, 1] >= threshold).astype(int)
+    
+    def __repr__(self):
+        return '\n'.join([('+' if beta>=0 else '') +
+                 sci(beta, self.prec) + 
+                 '('+
+                 str(self.feature_names[i]) +
+                 ')' 
+                 for i, beta in enumerate(self.coef_) if abs(beta)>0]) + '\n' + ('+' if self.intercept_ >= 0 else '') + sci(self.intercept_, self.prec)        
+
+    def __str__(self):
+        return 'LOGISTIC_ICL({0})'.format(str(self.get_params()))
+    
+    def fit(self, X, y, feature_names=None, verbose=False):
+        n, p = X.shape
+
+        beta = np.zeros(p, dtype=float)
+        b = 0.0
+
+        for it in range(self.max_iter):
+            if verbose: print('iteration {0}'.format(it))
+            # predicting with current model
+            eta = np.dot(X, beta) + b
+
+            # converting to probabilties 
+            p_hat = self._sigmoid(eta)
+            p_hat = np.clip(p_hat, self.eps, 1.0 - self.eps)
+            
+            # row weights
+            w = p_hat * (1.0 - p_hat)
+            w = np.clip(w, self.eps, 1.0)
+
+            # reweighted x and y
+            z = eta + (y - p_hat) / w
+            
+            w_sum = w.sum()
+            xbar = (w[:, None] * X).sum(axis=0) / w_sum
+            zbar = (w * z).sum() / w_sum
+
+            Xc = X - xbar
+            zc = z - zbar
+
+            s = np.sqrt(w)
+            X_star = Xc * s[:, None]
+            z_star = zc * s
+            
+            # fitting icl model to reweighted data
+            icl_iter = clone(self.icl)
+            icl_iter.fit(X_star, z_star, feature_names=feature_names, verbose=verbose>1)
+
+            beta_new = np.zeros(p, dtype=float)
+            beta_new[icl_iter.beta_idx_] = icl_iter.beta_
+
+            b_new = zbar - xbar @ beta_new
+
+            # updating previous solution as linear combination of past and current
+            beta_next = beta + self.damping * (beta_new - beta)
+            b_next = b + self.damping * (b_new - b)
+
+            # stopping criteria
+            delta = np.linalg.norm(beta_next - beta, 2) + abs(b_next - b)
+            if verbose:
+                print(f"iter {it+1}: delta={delta:.3e}")
+
+            beta, b = beta_next, b_next
+
+            if delta <= self.tol:
+                if verbose: print('converged')
+                break
         
-if __name__ == "__main__":
-    from sklearn.model_selection import train_test_split
+        if (verbose) and (it == self.max_iter): print('did not converge')
+
+        tol = 1e-10
+
+        # number of nonzeros in the fitted model
+        nz_idx = np.flatnonzero(np.abs(beta) > tol)
+        nz = int(np.sum(np.abs(beta) > tol))
+
+        std = X.std(axis=0, ddof=0)
+        scores = np.abs(beta) * std
+
+        kk = min(self.k, nz)
+
+        # choose among nonzero coefficients only (avoids picking zero-weight features)
+        if kk == 0:
+            # degenerate: no features selected
+            self.coef_ = np.zeros_like(beta)
+            self.idx = np.array([], dtype=int)
+            self.intercept_ = float(b)
+        else:
+            order = nz_idx[np.argsort(scores[nz_idx])[-kk:][::-1]]
+            XS = X[:, order]
+
+            clf = LogisticRegressionCV(
+                Cs=20,                 # or a list/array like np.logspace(-4, 4, 30)
+                cv=5,
+                penalty="l2",
+                solver="lbfgs",
+                scoring="neg_log_loss",
+                fit_intercept=True,
+                max_iter=5000,
+                n_jobs=-1,
+                refit=True,
+            )
+            clf.fit(XS, y)
+
+            self.coef_ = np.zeros_like(beta)
+            self.coef_[order] = clf.coef_.ravel()
+            self.idx = order
+            self.intercept_ = float(clf.intercept_[0])
+
+        self.feature_names_sparse_ = feature_names[self.idx]
+        self.feature_names = feature_names
+        return self
+    
+    @staticmethod
+    def _sigmoid(eta):
+        # stable sigmoid
+        eta = np.asarray(eta, dtype=float)
+        out = np.empty_like(eta, dtype=float)
+        pos = eta >= 0
+        neg = ~pos
+        out[pos] = 1.0 / (1.0 + np.exp(-eta[pos]))
+        exp_eta = np.exp(eta[neg])
+        out[neg] = exp_eta / (1.0 + exp_eta)
+        return out
+
+def zero_one_loss(X, y, model):
+    y = np.asarray(y)
+    y_hat = model.predict(X)
+    return np.mean(y_hat != y)
+
+def hinge_loss(X, y, model):
+    y = np.asarray(y)
+    y_pm = 2*y - 1          # {0,1} -> {-1,+1}
+    eta = model.decision_function(X)
+    return np.mean(np.maximum(0.0, 1.0 - y_pm * eta))
+    
+def log_loss(X, y, model):
+    y = np.asarray(y)
+    eta = model.decision_function(X)
+    return np.mean(np.logaddexp(0.0, eta) - y*eta)
+
+
+sci = lambda x, sig=3: f"{float(x):.{sig}e}"
+
+if __name__ == "__main__":   
+    test = "Synthetic" 
     random_state = 0
     np.random.seed(random_state)
-    n, p = 10000, 10
-    X = np.random.random(size=(n,p))
-    y = np.sqrt(X[:, 0]) - np.cbrt(X[:, 0]) + X[:, 0]**3 - np.log(X[:, 0]) + np.sin(X[:, 0]) + 1
-    names = ['X_{0}'.format(i) for i in range(p)]
+    from sklearn.model_selection import train_test_split
+    import pandas as pd
+    import os
 
-    rung = 1
-    small = ['sin', 'cos', 'log', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'inv']
-    big = ['six_pow', 'exp', 'add', 'mul', 'div', 'abs_diff']
-    small  = [(op, range(rung)) for op in small]
-    big = [(op, range(1)) for op in big]
-    ops = small+big
+    if test == "DIABETES":
+        df = pd.read_csv(os.path.join(os.getcwd(), "Input", "pima.csv"))
+        df["DIABETES"] = df["DIABETES"].map({"Y":1, "N": 0})
+        y = df['DIABETES'].values
+        X = df.drop(columns=['DIABETES'])
+        feature_names = X.columns
+        X = X.values
 
-    FE = FeatureExpansion(rung=rung, ops=ops)
-    Phi_names, Phi_symbols, Phi_ = FE.expand(X=X, names=names, check_pos=True, verbose=True)
-    X_train, X_test, y_train, y_test = train_test_split(Phi_, y, test_size=0.2, random_state=random_state)
-    for i, s in enumerate([5]):
-        icl = ICL(s=s, so=AdaptiveLASSO(gamma=1), k=5, fit_intercept=True, normalize=True, optimize_k=False, track_intermediates=True)
-        icl.fit(X=X_train, y=y_train, feature_names = Phi_names, verbose=False)
-        print(icl.repr_ensemble())
+        rung = 2
+        small = ['sin', 'cos', 'log', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'inv']
+        big = ['six_pow', 'exp', 'add', 'mul', 'div', 'abs_diff']
+        small  = [(op, range(rung)) for op in small]
+        big = [(op, range(1)) for op in big]
+        ops = small+big
+
+        FE = FeatureExpansion(rung=rung, ops=ops)
+        Phi_names, Phi_symbols, Phi_ = FE.expand(X=X, names=feature_names, check_pos=True, verbose=True)
+        X_train, X_test, y_train, y_test = train_test_split(Phi_, y, test_size=0.2, random_state=random_state)
+
+        logistic_icl_params = {
+            "s": 10,
+            "so": AdaptiveLASSO(gamma=1, fit_intercept=False),
+            "k": 5,
+            "pool_reset": False,
+            "track_intermediates": False,
+            "max_iter": 1000,
+            "tol": 1e-1,
+            "eps": 1e-3,
+            "damping": 0.5,
+            "prec": 3
+        }
+
+        icl_log = LOGISTIC_ICL(**logistic_icl_params)
+        icl_log.fit(X=X_train, y=y_train, feature_names=Phi_names, verbose=1)
+
+        print(icl_log.__repr__())
+        print('zero_one: {0}'.format(zero_one_loss(X_test, y_test, icl_log)))
+        print('hinge: {0}'.format(hinge_loss(X_test, y_test, icl_log)))
+        print('logloss: {0}'.format(log_loss(X_test, y_test, icl_log)))
+    
+    elif test=="Synthetic":
+        k,n,p=3,10000,1000
+        rng = np.random.default_rng(random_state)
+        X = rng.standard_normal((n,p))
+        feature_names = np.array(['X_{0}'.format(i) for i in range(p)])
+        support = range(k)
+        beta = np.zeros(p, dtype=float)
+        signs = rng.choice([-1.0, 1.0], size=k)
+        mags = rng.uniform(0.5, 1.5, size=k)
+        beta[support] = signs * mags
+        eta_no_b = X @ beta
+        b = float(-np.mean(eta_no_b))
+        eta = eta_no_b + b
+        p1 = 1.0 / (1.0 + np.exp(-np.clip(eta, -50, 50)))
+        y = rng.binomial(1, p1, size=n).astype(int)
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=random_state)
+
+        logistic_icl_params = {
+            "s": 10,
+            "so": AdaptiveLASSO(gamma=1, fit_intercept=False),
+            "k": k,
+            "pool_reset": False,
+            "track_intermediates": False,
+            "max_iter": 1000,
+            "tol": 1e-3,
+            "eps": 1e-6,
+            "damping": 0.8,
+            "prec": 3
+        }
+
+        icl_log = LOGISTIC_ICL(**logistic_icl_params)
+        icl_log.fit(X=X_train, y=y_train, feature_names=feature_names, verbose=1)
+
+        print(icl_log.__repr__())
+        print('zero_one: {0}'.format(zero_one_loss(X_test, y_test, icl_log)))
+        print('hinge: {0}'.format(hinge_loss(X_test, y_test, icl_log)))
+        print('logloss: {0}'.format(log_loss(X_test, y_test, icl_log)))
+    
+        print('True Coef: {0}'.format(beta[:k]))
+        print('True intercept: {0}'.format(b))
+        eta_test = icl_log.decision_function(X_test)    # log-odds
+        p_test = 1.0 / (1.0 + np.exp(-eta_test))
+        print('Bayes error: {0}'.format(np.mean(np.minimum(p_test, 1-p_test))))
