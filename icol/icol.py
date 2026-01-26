@@ -1070,7 +1070,7 @@ class FeatureExpansion:
                                 new_op_symbols = sym_vect(idx2)
                                 new_op_names = str_vectorize(new_op_symbols)
                                 X_i = X[:, idx1]
-                                new_op_X = X_i[:, np.newaxis]*X[:, idx2]                                                
+                                new_op_X = op_np(X_i[:, np.newaxis], X[:, idx2]) #X_i[:, np.newaxis]*X[:, idx2]                                                
                                 new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
                                                                         new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
             if not(new_names is None):                
@@ -1285,10 +1285,12 @@ def log_loss(X, y, model):
 sci = lambda x, sig=3: f"{float(x):.{sig}e}"
 
 if __name__ == "__main__":   
-    test = "Synthetic" 
+    test = "bandgap" 
     random_state = 0
     np.random.seed(random_state)
     from sklearn.model_selection import train_test_split
+    from sklearn.metrics import r2_score as r2
+
     import pandas as pd
     import os
 
@@ -1330,8 +1332,7 @@ if __name__ == "__main__":
         print(icl_log.__repr__())
         print('zero_one: {0}'.format(zero_one_loss(X_test, y_test, icl_log)))
         print('hinge: {0}'.format(hinge_loss(X_test, y_test, icl_log)))
-        print('logloss: {0}'.format(log_loss(X_test, y_test, icl_log)))
-    
+        print('logloss: {0}'.format(log_loss(X_test, y_test, icl_log))) 
     elif test=="Synthetic":
         k,n,p=3,10000,1000
         rng = np.random.default_rng(random_state)
@@ -1376,3 +1377,30 @@ if __name__ == "__main__":
         eta_test = icl_log.decision_function(X_test)    # log-odds
         p_test = 1.0 / (1.0 + np.exp(-eta_test))
         print('Bayes error: {0}'.format(np.mean(np.minimum(p_test, 1-p_test))))
+    elif test=='bandgap':
+        path = os.path.join('/'.join(os.getcwd().split('/')[:-1]), 'icol_exp', 'Input', 'data_HTE.csv')
+        df = pd.read_csv(path)
+        y = df['Y_oxygenate'].values
+        X = df.drop(columns=['material_and_condition', 'Y_oxygenate'])
+        feature_names = X.columns
+        X = X.values
+
+        rung = 2
+        small = ['sin', 'cos', 'log', 'abs', 'sqrt', 'cbrt', 'sq', 'cb', 'inv']
+        big = ['six_pow', 'exp', 'add', 'mul', 'div', 'abs_diff']
+        small  = [(op, range(rung)) for op in small]
+        big = [(op, range(1)) for op in big]
+        ops = small+big
+
+        FE = FeatureExpansion(rung=rung, ops=ops)
+        Phi_names, Phi_symbols, Phi_ = FE.expand(X=X, names=feature_names, check_pos=True, verbose=True)
+
+        X_train, X_test, y_train, y_test = train_test_split(Phi_, y, test_size=0.2, random_state=random_state)
+        for i, s in enumerate([1,2,3,4,5,6,7,8,9,10,20,30,40,50,60,70,80,90,100,200,300,400]):
+            icl = ICL(s=s, so=AdaptiveLASSO(gamma=1, fit_intercept=False), k=5, fit_intercept=True,
+                    normalize=True, optimize_k=True, track_intermediates=False)
+
+            icl.fit(X_train, y_train, feature_names=Phi_names, verbose=0)
+            y_test_hat = icl.predict(X_test)
+            score = r2(y_test, y_test_hat)
+            print('model={0}, s={2}, r2={1}'.format(icl.__repr__(), score, s))
