@@ -31,3 +31,6 @@ Input/
 .DS_Store
 *.swp
 Thumbs.db
+
+# Runner
+run_icol.py
