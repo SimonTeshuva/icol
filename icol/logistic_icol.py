@@ -123,10 +123,9 @@ class LOGISTIC_LASSO:
             'clp': self.clp
         }
 
-    def __repr__(self):
-        params = self.get_params()
-        params_str = ", ".join(f"{k}={params[k]!r}" for k in sorted(params))
-        return f"LogisticLasso({params_str})"
+    def __repr__(self, prec=3):
+        coef = self.model.coef_.ravel()
+        return ''.join([('+' if c > 0 else '') + sci(c, sig=prec) + '(' + self.feature_names[i] + ')' for i, c in enumerate(coef) if (np.abs(coef[i]) > self.eps_nnz)])  
 
     def fit(self, X, y, d, feature_names=None, verbose=False):
         self.feature_names = ['X_{0}'.format(i) for i in range(X.shape[1])] if feature_names is None else feature_names
@@ -152,9 +151,10 @@ class LOGISTIC_LASSO:
             np.abs(np.ravel(coef)) > self.eps_nnz
             ))
     
-    def __str__(self, prec=3):
-        coef = self.model.coef_.ravel()
-        return ''.join([('+' if c > 0 else '') + sci(c, sig=prec) + '(' + self.feature_names[i] + ')' for i, c in enumerate(coef) if (np.abs(coef[i]) > self.eps_nnz)])  
+    def __str__(self):
+        params = self.get_params()
+        params_str = ", ".join(f"{k}={params[k]!r}" for k in sorted(params))
+        return f"LogisticLasso({params_str})"
     
     def decision_function(self, X):
         return np.dot(X, self.model.coef_.ravel())
