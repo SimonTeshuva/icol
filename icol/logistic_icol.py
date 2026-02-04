@@ -117,9 +117,6 @@ class LOGISTIC_LASSO:
             "tol": self.tol,
             "eps_nnz": self.eps_nnz,
             "random_state": self.random_state,
-            "penalty": "l1",
-            "l1_ratio": 1,
-            "fit_intercept": False,
             'clp': self.clp
         }
 
