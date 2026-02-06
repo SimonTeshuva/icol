@@ -131,7 +131,7 @@ class LOGISTIC_ADALASSO:
         nonancols = np.isnan(X).sum(axis=0)==0
         noinfcols = np.isinf(X).sum(axis=0)==0
         valcols = np.logical_and(nonancols, noinfcols)
-        if self.gamma <= 1e-10:
+        if np.abs(self.gamma) <= 1e-10:
             beta_hat = np.ones(X.shape[1])
             w_hat = np.ones(X.shape[1])
             X_star_star = X.copy()
@@ -171,7 +171,6 @@ class LOGISTIC_ADALASSO:
         self.model.coef_ = self.coef_
 
         return self
-
     
     def _count_nnz(self, coef):
         return int(np.sum(
@@ -179,9 +178,7 @@ class LOGISTIC_ADALASSO:
             ))
     
     def __str__(self):
-        params = self.get_params()
-        params_str = ", ".join(f"{k}={params[k]!r}" for k in sorted(params))
-        return f"LogisticLasso({params_str})"
+        return f"Logistic{0}Lasso".format("Ada" if np.abs(self.gamma)<=1e-10 else '')
     
     def decision_function(self, X):
         return np.dot(X, self.model.coef_.ravel())
