@@ -84,10 +84,10 @@ class generalised_SIS:
         chosen = np.array(chosen, dtype=int)
         return scores[chosen], chosen
         
-class LOGISTIC_LASSO:
+class LOGISTIC_ADALASSO:
     def __init__(self, log_c_lo=-4, log_c_hi=3, c_num=100,  solver="saga",
                  class_weight=None, max_iter=5000, tol=1e-4, eps_nnz=1e-12, 
-                 clp=np.infty, random_state=None):
+                 clp=np.infty, random_state=None, gamma=1):
         self.log_c_lo = log_c_lo
         self.log_c_hi = log_c_hi
         self.c_num= c_num
@@ -99,6 +99,7 @@ class LOGISTIC_LASSO:
         self.eps_nnz = eps_nnz
         self.random_state = random_state
         self.clp = clp
+        self.gamma = gamma
 
         self.models = np.array([LogisticRegression(C=c, 
                            solver=self.solver, class_weight=self.class_weight, 
@@ -126,10 +127,30 @@ class LOGISTIC_LASSO:
 
     def fit(self, X, y, d, feature_names=None, verbose=False):
         self.feature_names = ['X_{0}'.format(i) for i in range(X.shape[1])] if feature_names is None else feature_names
+
+        nonancols = np.isnan(X).sum(axis=0)==0
+        noinfcols = np.isinf(X).sum(axis=0)==0
+        valcols = np.logical_and(nonancols, noinfcols)
+        if self.gamma <= 1e-10:
+            beta_hat = np.ones(X.shape[1])
+            w_hat = np.ones(X.shape[1])
+            X_star_star = X.copy()
+        else:
+            X_valcols = X[:, valcols]
+            LR = LogisticRegression(penalty=None, fit_intercept=False, random_state=self.random_state)
+            LR.fit(X_valcols, y)
+            beta_hat = LR.coef_
+                        
+            w_hat = 1/np.power(np.abs(beta_hat), self.gamma)
+            X_star_star = np.zeros_like(X_valcols)
+            for j in range(X_star_star.shape[1]): # vectorise
+                X_j = X_valcols[:, j]/w_hat[j]
+                X_star_star[:, j] = X_j
+
         best_idx = 0
         for i, model in enumerate(self.models):
             if verbose: print('Fitting model {0} of {1} with C={2} and has '.format(i, len(self.models), model.C), end='')
-            model.fit(X, y)
+            model.fit(X_star_star, y)
             nnz = self._count_nnz(model.coef_)
             if verbose: print('{0} nonzero terms'.format(nnz))
             if nnz<=d:
@@ -138,10 +159,19 @@ class LOGISTIC_LASSO:
                 break
 
         self.model_idx = best_idx
-        self.model = self.models[self.model_idx]
-        self.coef_ = self.model.coef_.ravel()
         self.coef_idx_ = np.arange(len(self.coef_))[np.abs(np.ravel(self.coef_)) > self.eps_nnz]
+
+        beta_hat_star_star = self.models[self.model_idx].coef_.ravel()
+        beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+        beta_hat_star_n = np.zeros(X.shape[1])
+        beta_hat_star_n[valcols] = beta_hat_star_n_valcol
+        
+        self.coef_ = beta_hat_star_n
+        self.model = self.models[self.model_idx]
+        self.model.coef_ = self.coef_
+
         return self
+
     
     def _count_nnz(self, coef):
         return int(np.sum(
