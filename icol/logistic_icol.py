@@ -121,10 +121,6 @@ class LOGISTIC_ADALASSO:
             'clp': self.clp
         }
 
-    def __repr__(self, prec=3):
-        coef = self.model.coef_.ravel()
-        return ''.join([('+' if c > 0 else '') + sci(c, sig=prec) + '(' + self.feature_names[i] + ')' for i, c in enumerate(coef) if (np.abs(coef[i]) > self.eps_nnz)])  
-
     def fit(self, X, y, d, feature_names=None, verbose=False):
         self.feature_names = ['X_{0}'.format(i) for i in range(X.shape[1])] if feature_names is None else feature_names
 
@@ -143,6 +139,7 @@ class LOGISTIC_ADALASSO:
                         
             w_hat = 1/np.power(np.abs(beta_hat), self.gamma)
             X_star_star = np.zeros_like(X_valcols)
+            print(X_valcols.shape, w_hat.shape)
             for j in range(X_star_star.shape[1]): # vectorise
                 X_j = X_valcols[:, j]/w_hat[j]
                 X_star_star[:, j] = X_j
@@ -179,8 +176,11 @@ class LOGISTIC_ADALASSO:
             ))
     
     def __str__(self):
-        return f"Logistic{0}Lasso".format("Ada" if np.abs(self.gamma)<=1e-10 else '')
+        return "Logistic{0}Lasso".format("Ada" if np.abs(self.gamma)>=1e-10 else '')
     
+    def __repr__(self, prec=3):
+        return self.__str__()
+
     def decision_function(self, X):
         return np.dot(X, self.model.coef_.ravel())
     
