@@ -294,16 +294,102 @@ class FeatureExpansion:
                         new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
                                                                     new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
                     elif inputs == 2:
-                        for idx1 in range(prev_p, X.shape[1]):
-                            sym_vect = np.vectorize(lambda idx2: op_sym(symbols[idx1], symbols[idx2]))
-                            idx2 = range(idx1 if comm else X.shape[1])
-                            if len(idx2) > 0:
-                                new_op_symbols = sym_vect(idx2)
-                                new_op_names = str_vectorize(new_op_symbols)
-                                X_i = X[:, idx1]
-                                new_op_X = op_np(X_i[:, np.newaxis], X[:, idx2]) #X_i[:, np.newaxis]*X[:, idx2]                                                
-                                new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
-                                                                        new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
+                        p = X.shape[1]
+
+                        if prev_p == 0:
+                            # First round: allow base×base interactions
+                            idx1_range = range(0, p)
+
+                            if comm:
+                                # unordered pairs i<j (no self)
+                                for i in idx1_range:
+                                    js = range(i + 1, p)
+                                    if js.start >= js.stop:
+                                        continue
+
+                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+                                    new_op_names = str_vectorize(new_op_symbols)
+                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+                                    new_names, new_symbols, new_X = self.add_new(
+                                        new_names, new_symbols, new_X,
+                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
+                                    )
+                            else:
+                                # directed pairs i!=j (no self)
+                                for i in idx1_range:
+                                    js = [j for j in range(0, p) if j != i]
+                                    if not js:
+                                        continue
+
+                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+                                    new_op_names = str_vectorize(new_op_symbols)
+                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+                                    new_names, new_symbols, new_X = self.add_new(
+                                        new_names, new_symbols, new_X,
+                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
+                                    )
+
+                        else:
+                            # Later rounds: only NEW×OLD to avoid redoing old–old and commutative duplicates
+                            old = range(0, prev_p)
+                            new = range(prev_p, p)
+
+                            if comm:
+                                for i in new:
+                                    js = old  # i != j guaranteed since sets disjoint
+                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+                                    if new_op_symbols.size == 0:
+                                        continue
+                                    new_op_names = str_vectorize(new_op_symbols)
+                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+                                    new_names, new_symbols, new_X = self.add_new(
+                                        new_names, new_symbols, new_X,
+                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
+                                    )
+                            else:
+                                # directed both ways, still no self
+                                # (new op old)
+                                for i in new:
+                                    js = old
+                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+                                    if new_op_symbols.size == 0:
+                                        continue
+                                    new_op_names = str_vectorize(new_op_symbols)
+                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+                                    new_names, new_symbols, new_X = self.add_new(
+                                        new_names, new_symbols, new_X,
+                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
+                                    )
+
+                                # (old op new)
+                                for j in old:
+                                    is_ = new
+                                    new_op_symbols = np.array([op_sym(symbols[j], symbols[i]) for i in is_], dtype=object)
+                                    if new_op_symbols.size == 0:
+                                        continue
+                                    new_op_names = str_vectorize(new_op_symbols)
+                                    new_op_X = op_np(X[:, j][:, None], X[:, is_])
+
+                                    new_names, new_symbols, new_X = self.add_new(
+                                        new_names, new_symbols, new_X,
+                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
+                                    )
+
+                    # elif inputs == 2:
+                    #     for idx1 in range(prev_p, X.shape[1]):
+                    #         sym_vect = np.vectorize(lambda idx2: op_sym(symbols[idx1], symbols[idx2]))
+                    #         idx2 = range(idx1 if comm else X.shape[1])
+                    #         if len(idx2) > 0: 
+                    #             new_op_symbols = sym_vect(idx2)
+                    #             new_op_names = str_vectorize(new_op_symbols)
+                    #             X_i = X[:, idx1]
+                    #             new_op_X = op_np(X_i[:, np.newaxis], X[:, idx2]) #X_i[:, np.newaxis]*X[:, idx2]                                                
+                    #             new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
+                    #                                                     new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
             if not(new_names is None):                
                 names = np.concatenate((names, new_names))
                 symbols = np.concatenate((symbols, new_symbols))
