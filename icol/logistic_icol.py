@@ -136,10 +136,12 @@ class LOGISTIC_ADALASSO:
             LR = LogisticRegression(penalty=None, fit_intercept=False, random_state=self.random_state)
             LR.fit(X_valcols, y)
             beta_hat = LR.coef_.squeeze()
-                        
-            w_hat = 1/np.power(np.abs(beta_hat), self.gamma)
+            if beta_hat.shape == ():
+                print('bad shape')
+                beta_hat = beta_hat.reshape(-1, 1)
+            
+            w_hat = 1/np.power(np.abs(beta_hat), self.gamma).ravel()
             X_star_star = np.zeros_like(X_valcols)
-            print(X_valcols.shape, w_hat.shape)
             for j in range(X_star_star.shape[1]): # vectorise
                 X_j = X_valcols[:, j]/w_hat[j]
                 X_star_star[:, j] = X_j
@@ -161,6 +163,8 @@ class LOGISTIC_ADALASSO:
         self.coef_idx_ = np.arange(len(beta_hat_star_star))[np.abs(np.ravel(beta_hat_star_star)) > self.eps_nnz]
 
         beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+
+
         beta_hat_star_n = np.zeros(X.shape[1])
         beta_hat_star_n[valcols] = beta_hat_star_n_valcol
         
