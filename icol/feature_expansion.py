@@ -152,256 +152,857 @@ class PolynomialFeaturesICL:
     def get_feature_names_out(self):
         return self.PolynomialFeatures.get_feature_names_out()
 
-
 class FeatureExpansion:
-    def __init__(self, ops, rung, printrate=1000):
+    def __init__(self, ops, rung, printrate=1000, dtype=np.float64):
         self.ops = ops
         self.rung = rung
         self.printrate = printrate
         self.prev_print = 0
+        self.dtype = dtype
         for i, op in enumerate(self.ops):
             if type(op) == str:
                 self.ops[i] = (op, range(rung))
-        
+
     def remove_redundant_features(self, symbols, names, X):
         sorted_idxs = np.argsort(names)
         for i, idx in enumerate(sorted_idxs):
             if i == 0:
                 unique = [idx]
-            elif names[idx] != names[sorted_idxs[i-1]]:
+            elif names[idx] != names[sorted_idxs[i - 1]]:
                 unique += [idx]
         unique_original_order = np.sort(unique)
-        
-        return symbols[unique_original_order], names[unique_original_order], X[:, unique_original_order]
-    
+
+        return (
+            symbols[unique_original_order],
+            names[unique_original_order],
+            X[:, unique_original_order],
+        )
+
     def expand(self, X, y=None, names=None, verbose=False, f=None, check_pos=False):
         n, p = X.shape
         if (names is None) or (len(names) != p):
-            names = ['x_{0}'.format(i) for i in range(X.shape[1])]
-        
+            names = ["x_{0}".format(i) for i in range(X.shape[1])]
+
         if check_pos == False:
-            symbols = sp.symbols(' '.join(name.replace(' ', '.') for name in names))
+            symbols = sp.symbols(" ".join(name.replace(" ", ".") for name in names))
         else:
             symbols = []
             for i, name in enumerate(names):
-                name = name.replace(' ', '.')
+                name = name.replace(" ", ".")
                 if np.all(X[:, i] > 0):
                     sym = sp.symbols(name, real=True, positive=True)
                 else:
-                    sym = sp.symbols(name, real=True)               
+                    sym = sp.symbols(name, real=True)
                 symbols.append(sym)
 
         symbols = np.array(symbols)
         names = np.array(names)
-        
-        if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung, verbose=verbose>2)))
-        
-        names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
 
-        if not(f is None):
-            import pandas as pd
-            df = pd.DataFrame(data=X, columns=names)
-            df['y'] = y
-            df.to_csv(f)
+        X = np.asarray(X, dtype=self.dtype, order="C")
+
+        names, symbols, X = self.expand_aux(
+            X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose
+        )
 
         return names, symbols, X
-        
-    def estimate_workload(self, p, max_rung,verbose=False):
-        p0 = 0
-        p1 = p
-        for rung in range(max_rung):
-            if verbose: print('Applying rung {0} expansion'.format(rung))
-            new_u, new_bc, new_bn = 0, 0, 0
-            for (op, rung_range) in self.ops:
-                if rung in rung_range:
-                    if verbose: print('Applying {0} to {1} features will result in approximately '.format(op, p1-p0))
-                    if OP_DICT[op]['inputs'] == 1:
-                        new_u += p1
-                        if verbose: print('{0} new features'.format(p1))
-                    elif OP_DICT[op]['commutative'] == True:
-                        new_bc += (1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)
-                        if verbose: print('{0} new features'.format((1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)))
-                    else:
-                        new_bn += (p1 - p0 + 1)*(p0 + p1 + 2)
-                        if verbose: print('{0} new features'.format((p1 - p0 + 1)*(p0 + p1 + 2)))
-            p0 = p1
-            p1 = p1 + new_u + new_bc + new_bn
-            if verbose: print('For a total of {0} features by rung {1}'.format(p1, rung))
-        return p1
-        
-    def add_new(self, new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=False):
-        valid = (np.isnan(new_X_i).sum(axis=0) + np.isposinf(new_X_i).sum(axis=0) + np.isneginf(new_X_i).sum(axis=0)) == 0
-        if new_names is None:
-            new_names = np.array(new_name[valid])
-            new_symbols = np.array(new_symbol[valid])
-            new_X = np.array(new_X_i[:, valid])
-        else:
-            new_names = np.concatenate((new_names, new_name[valid]))
-            new_symbols = np.concatenate((new_symbols, new_symbol[valid]))
-            new_X = np.hstack([new_X, new_X_i[:, valid]])
-#        if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)))
-        if (verbose > 1) and not(new_names is None) and (len(new_names) - self.prev_print >= self.printrate):
-            self.prev_print = len(new_names)
-            elapsed = np.round(time() - self.start_time, 2)
-            print('Created {0} features so far in {1} seconds'.format(len(new_names),elapsed))
-        return new_names, new_symbols, new_X
+
+    def add_new(
+        self,
+        new_names_list,
+        new_symbols_list,
+        new_X_list,
+        new_name,
+        new_symbol,
+        new_X_i,
+        verbose=False,
+    ):
+        valid = (
+            np.isnan(new_X_i).sum(axis=0)
+            + np.isposinf(new_X_i).sum(axis=0)
+            + np.isneginf(new_X_i).sum(axis=0)
+        ) == 0
+
+        if not np.any(valid):
+            return new_names_list, new_symbols_list, new_X_list
+
+        new_names_list.append(np.asarray(new_name)[valid])
+        new_symbols_list.append(np.asarray(new_symbol, dtype=object)[valid])
+        new_X_list.append(
+            np.asarray(new_X_i[:, valid], dtype=self.dtype, order="C")
+        )
+
+        if verbose > 1:
+            created = sum(arr.shape[0] for arr in new_names_list)
+            if created - self.prev_print >= self.printrate:
+                self.prev_print = created
+                elapsed = np.round(time() - self.start_time, 2)
+                print(f"Created {created} features so far in {elapsed} seconds")
+
+        return new_names_list, new_symbols_list, new_X_list
 
     def expand_aux(self, X, names, symbols, crung, prev_p, verbose=False):
-        
+
         str_vectorize = np.vectorize(str)
 
-        def simplify_nested_powers(expr):
-            # Replace (x**n)**(1/n) with x
-            def flatten_pow_chain(e):
-                if isinstance(e, sp.Pow) and isinstance(e.base, sp.Pow):
-                    base, inner_exp = e.base.args
-                    outer_exp = e.exp
-                    combined_exp = inner_exp * outer_exp
-                    if sp.simplify(combined_exp) == 1:
-                        return base
-                    return sp.Pow(base, combined_exp)
-                elif isinstance(e, sp.Pow) and sp.simplify(e.exp) == 1:
-                    return e.base
-                return e
-            # Apply recursively
-            return expr.replace(
-                lambda e: isinstance(e, sp.Pow),
-                flatten_pow_chain
-            )
-        
         if crung == 0:
             self.start_time = time()
-            symbols, names, X = self.remove_redundant_features(X=X, names=names, symbols=symbols)
-        if crung==self.rung:
-            if verbose: print('Completed {0} rounds of feature transformations'.format(self.rung))
+            symbols, names, X = self.remove_redundant_features(
+                X=X, names=names, symbols=symbols
+            )
+
+        if crung == self.rung:
             return symbols, names, X
-        else:
-            if verbose: print('Applying round {0} of feature transformations'.format(crung+1))
-#            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(p=X.shape[1], max_rung=1)))
-                
-            new_names, new_symbols, new_X = None, None, None
-            
-            for (op_key, rung_range) in self.ops:
-                if crung in rung_range:
-                    if verbose>1: print('Applying operator {0} to {1} features'.format(op_key, X.shape[1]))
-                    op_params = OP_DICT[op_key]
-                    op_sym, op_np, inputs, comm = op_params['op'], op_params['op_np'], op_params['inputs'], op_params['commutative']
-                    if inputs == 1:
-                        sym_vect = np.vectorize(op_sym)
-                        new_op_symbols = sym_vect(symbols[prev_p:])
-                        new_op_X = op_np(X[:, prev_p:])
+
+        new_names_list, new_symbols_list, new_X_list = [], [], []
+
+        for (op_key, rung_range) in self.ops:
+            if crung not in rung_range:
+                continue
+
+            op_params = OP_DICT[op_key]
+            op_sym, op_np, inputs, comm = (
+                op_params["op"],
+                op_params["op_np"],
+                op_params["inputs"],
+                op_params["commutative"],
+            )
+
+            if inputs == 1:
+                new_op_symbols = np.vectorize(op_sym)(symbols[prev_p:])
+                new_op_X = op_np(X[:, prev_p:])
+                new_op_names = str_vectorize(new_op_symbols)
+
+                new_names_list, new_symbols_list, new_X_list = self.add_new(
+                    new_names_list,
+                    new_symbols_list,
+                    new_X_list,
+                    new_op_names,
+                    new_op_symbols,
+                    new_op_X,
+                    verbose=verbose,
+                )
+
+            elif inputs == 2:
+                p = X.shape[1]
+                old = range(0, prev_p)
+                new = range(prev_p, p)
+
+                if prev_p == 0:
+                    idx1_range = range(p)
+                    for i in idx1_range:
+                        js = range(i + 1, p) if comm else [j for j in range(p) if j != i]
+                        if not js:
+                            continue
+                        new_op_symbols = np.array(
+                            [op_sym(symbols[i], symbols[j]) for j in js],
+                            dtype=object,
+                        )
+                        new_op_X = op_np(X[:, i][:, None], X[:, js])
                         new_op_names = str_vectorize(new_op_symbols)
-                        new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
-                                                                    new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
-                    elif inputs == 2:
-                        p = X.shape[1]
 
-                        if prev_p == 0:
-                            # First round: allow base×base interactions
-                            idx1_range = range(0, p)
+                        new_names_list, new_symbols_list, new_X_list = self.add_new(
+                            new_names_list,
+                            new_symbols_list,
+                            new_X_list,
+                            new_op_names,
+                            new_op_symbols,
+                            new_op_X,
+                            verbose=verbose,
+                        )
+                else:
+                    for i in new:
+                        js = old
+                        new_op_symbols = np.array(
+                            [op_sym(symbols[i], symbols[j]) for j in js],
+                            dtype=object,
+                        )
+                        new_op_X = op_np(X[:, i][:, None], X[:, js])
+                        new_op_names = str_vectorize(new_op_symbols)
 
-                            if comm:
-                                # unordered pairs i<j (no self)
-                                for i in idx1_range:
-                                    js = range(i + 1, p)
-                                    if js.start >= js.stop:
-                                        continue
+                        new_names_list, new_symbols_list, new_X_list = self.add_new(
+                            new_names_list,
+                            new_symbols_list,
+                            new_X_list,
+                            new_op_names,
+                            new_op_symbols,
+                            new_op_X,
+                            verbose=verbose,
+                        )
 
-                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
-                                    new_op_names = str_vectorize(new_op_symbols)
-                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+                        if not comm:
+                            for j in old:
+                                new_op_symbols = np.array(
+                                    [op_sym(symbols[j], symbols[i])],
+                                    dtype=object,
+                                )
+                                new_op_X = op_np(X[:, j][:, None], X[:, i:i+1])
+                                new_op_names = str_vectorize(new_op_symbols)
 
-                                    new_names, new_symbols, new_X = self.add_new(
-                                        new_names, new_symbols, new_X,
-                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
-                                    )
-                            else:
-                                # directed pairs i!=j (no self)
-                                for i in idx1_range:
-                                    js = [j for j in range(0, p) if j != i]
-                                    if not js:
-                                        continue
+                                new_names_list, new_symbols_list, new_X_list = self.add_new(
+                                    new_names_list,
+                                    new_symbols_list,
+                                    new_X_list,
+                                    new_op_names,
+                                    new_op_symbols,
+                                    new_op_X,
+                                    verbose=verbose,
+                                )
 
-                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
-                                    new_op_names = str_vectorize(new_op_symbols)
-                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+        # ====== CRITICAL CHANGE: SAFE PREALLOC CONCAT ======
+        if new_X_list:
+            n = X.shape[0]
+            new_cols = sum(b.shape[1] for b in new_X_list)
 
-                                    new_names, new_symbols, new_X = self.add_new(
-                                        new_names, new_symbols, new_X,
-                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
-                                    )
+            new_X = np.empty((n, new_cols), dtype=self.dtype)
+            j = 0
+            for blk in new_X_list:
+                w = blk.shape[1]
+                new_X[:, j:j+w] = blk
+                j += w
 
-                        else:
-                            # Later rounds: only NEW×OLD to avoid redoing old–old and commutative duplicates
-                            old = range(0, prev_p)
-                            new = range(prev_p, p)
+            X_next = np.empty((n, X.shape[1] + new_cols), dtype=self.dtype)
+            X_next[:, :X.shape[1]] = X
+            X_next[:, X.shape[1]:] = new_X
 
-                            if comm:
-                                for i in new:
-                                    js = old  # i != j guaranteed since sets disjoint
-                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
-                                    if new_op_symbols.size == 0:
-                                        continue
-                                    new_op_names = str_vectorize(new_op_symbols)
-                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+            X = X_next
+            names = np.concatenate((names, np.concatenate(new_names_list)))
+            symbols = np.concatenate((symbols, np.concatenate(new_symbols_list)))
+            prev_p = X.shape[1] - new_cols
 
-                                    new_names, new_symbols, new_X = self.add_new(
-                                        new_names, new_symbols, new_X,
-                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
-                                    )
-                            else:
-                                # directed both ways, still no self
-                                # (new op old)
-                                for i in new:
-                                    js = old
-                                    new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
-                                    if new_op_symbols.size == 0:
-                                        continue
-                                    new_op_names = str_vectorize(new_op_symbols)
-                                    new_op_X = op_np(X[:, i][:, None], X[:, js])
+        symbols, names, X = self.remove_redundant_features(
+            X=X, names=names, symbols=symbols
+        )
 
-                                    new_names, new_symbols, new_X = self.add_new(
-                                        new_names, new_symbols, new_X,
-                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
-                                    )
+        return self.expand_aux(
+            X=X,
+            names=names,
+            symbols=symbols,
+            crung=crung + 1,
+            prev_p=prev_p,
+            verbose=verbose,
+        )
 
-                                # (old op new)
-                                for j in old:
-                                    is_ = new
-                                    new_op_symbols = np.array([op_sym(symbols[j], symbols[i]) for i in is_], dtype=object)
-                                    if new_op_symbols.size == 0:
-                                        continue
-                                    new_op_names = str_vectorize(new_op_symbols)
-                                    new_op_X = op_np(X[:, j][:, None], X[:, is_])
 
-                                    new_names, new_symbols, new_X = self.add_new(
-                                        new_names, new_symbols, new_X,
-                                        new_op_names, new_op_symbols, new_op_X, verbose=verbose
-                                    )
+# class FeatureExpansion:
+#     def __init__(self, ops, rung, printrate=1000):
+#         self.ops = ops
+#         self.rung = rung
+#         self.printrate = printrate
+#         self.prev_print = 0
+#         for i, op in enumerate(self.ops):
+#             if type(op) == str:
+#                 self.ops[i] = (op, range(rung))
 
-                    # elif inputs == 2:
-                    #     for idx1 in range(prev_p, X.shape[1]):
-                    #         sym_vect = np.vectorize(lambda idx2: op_sym(symbols[idx1], symbols[idx2]))
-                    #         idx2 = range(idx1 if comm else X.shape[1])
-                    #         if len(idx2) > 0: 
-                    #             new_op_symbols = sym_vect(idx2)
-                    #             new_op_names = str_vectorize(new_op_symbols)
-                    #             X_i = X[:, idx1]
-                    #             new_op_X = op_np(X_i[:, np.newaxis], X[:, idx2]) #X_i[:, np.newaxis]*X[:, idx2]                                                
-                    #             new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
-                    #                                                     new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
-            if not(new_names is None):                
-                names = np.concatenate((names, new_names))
-                symbols = np.concatenate((symbols, new_symbols))
-                prev_p = X.shape[1]
-                X = np.hstack([X, new_X])
-            else:
-                prev_p = X.shape[1]
+#     def remove_redundant_features(self, symbols, names, X):
+#         sorted_idxs = np.argsort(names)
+#         for i, idx in enumerate(sorted_idxs):
+#             if i == 0:
+#                 unique = [idx]
+#             elif names[idx] != names[sorted_idxs[i - 1]]:
+#                 unique += [idx]
+#         unique_original_order = np.sort(unique)
+
+#         return (
+#             symbols[unique_original_order],
+#             names[unique_original_order],
+#             X[:, unique_original_order],
+#         )
+
+#     def expand(self, X, y=None, names=None, verbose=False, f=None, check_pos=False):
+#         n, p = X.shape
+#         if (names is None) or (len(names) != p):
+#             names = ["x_{0}".format(i) for i in range(X.shape[1])]
+
+#         if check_pos == False:
+#             symbols = sp.symbols(" ".join(name.replace(" ", ".") for name in names))
+#         else:
+#             symbols = []
+#             for i, name in enumerate(names):
+#                 name = name.replace(" ", ".")
+#                 if np.all(X[:, i] > 0):
+#                     sym = sp.symbols(name, real=True, positive=True)
+#                 else:
+#                     sym = sp.symbols(name, real=True)
+#                 symbols.append(sym)
+
+#         symbols = np.array(symbols)
+#         names = np.array(names)
+
+#         if verbose:
+#             print(
+#                 "Estimating the creation of around {0} features".format(
+#                     self.estimate_workload(p=p, max_rung=self.rung, verbose=verbose > 2)
+#                 )
+#             )
+
+#         names, symbols, X = self.expand_aux(
+#             X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose
+#         )
+
+#         if not (f is None):
+#             import pandas as pd
+
+#             df = pd.DataFrame(data=X, columns=names)
+#             df["y"] = y
+#             df.to_csv(f)
+
+#         return names, symbols, X
+
+#     def estimate_workload(self, p, max_rung, verbose=False):
+#         p0 = 0
+#         p1 = p
+#         for rung in range(max_rung):
+#             if verbose:
+#                 print("Applying rung {0} expansion".format(rung))
+#             new_u, new_bc, new_bn = 0, 0, 0
+#             for (op, rung_range) in self.ops:
+#                 if rung in rung_range:
+#                     if verbose:
+#                         print(
+#                             "Applying {0} to {1} features will result in approximately ".format(
+#                                 op, p1 - p0
+#                             )
+#                         )
+#                     if OP_DICT[op]["inputs"] == 1:
+#                         new_u += p1
+#                         if verbose:
+#                             print("{0} new features".format(p1))
+#                     elif OP_DICT[op]["commutative"] == True:
+#                         new_bc += (1 / 2) * (p1 - p0 + 1) * (p0 + p1 + 2)
+#                         if verbose:
+#                             print(
+#                                 "{0} new features".format(
+#                                     (1 / 2) * (p1 - p0 + 1) * (p0 + p1 + 2)
+#                                 )
+#                             )
+#                     else:
+#                         new_bn += (p1 - p0 + 1) * (p0 + p1 + 2)
+#                         if verbose:
+#                             print(
+#                                 "{0} new features".format(
+#                                     (p1 - p0 + 1) * (p0 + p1 + 2)
+#                                 )
+#                             )
+#             p0 = p1
+#             p1 = p1 + new_u + new_bc + new_bn
+#             if verbose:
+#                 print("For a total of {0} features by rung {1}".format(p1, rung))
+#         return p1
+
+#     # --- CHANGED: now accumulates chunks in lists, no repeated concatenation/hstack ---
+#     def add_new(
+#         self,
+#         new_names_list,
+#         new_symbols_list,
+#         new_X_list,
+#         new_name,
+#         new_symbol,
+#         new_X_i,
+#         verbose=False,
+#     ):
+#         valid = (
+#             np.isnan(new_X_i).sum(axis=0)
+#             + np.isposinf(new_X_i).sum(axis=0)
+#             + np.isneginf(new_X_i).sum(axis=0)
+#         ) == 0
+
+#         if not np.any(valid):
+#             return new_names_list, new_symbols_list, new_X_list
+
+#         new_names_list.append(np.asarray(new_name)[valid])
+#         new_symbols_list.append(np.asarray(new_symbol, dtype=object)[valid])
+#         new_X_list.append(np.asarray(new_X_i)[:, valid])
+
+#         if (verbose > 1) and (len(new_names_list) > 0):
+#             created = sum(arr.shape[0] for arr in new_names_list)
+#             if created - self.prev_print >= self.printrate:
+#                 self.prev_print = created
+#                 elapsed = np.round(time() - self.start_time, 2)
+#                 print(f"Created {created} features so far in {elapsed} seconds")
+
+#         return new_names_list, new_symbols_list, new_X_list
+
+#     def expand_aux(self, X, names, symbols, crung, prev_p, verbose=False):
+
+#         str_vectorize = np.vectorize(str)
+
+#         def simplify_nested_powers(expr):
+#             # Replace (x**n)**(1/n) with x
+#             def flatten_pow_chain(e):
+#                 if isinstance(e, sp.Pow) and isinstance(e.base, sp.Pow):
+#                     base, inner_exp = e.base.args
+#                     outer_exp = e.exp
+#                     combined_exp = inner_exp * outer_exp
+#                     if sp.simplify(combined_exp) == 1:
+#                         return base
+#                     return sp.Pow(base, combined_exp)
+#                 elif isinstance(e, sp.Pow) and sp.simplify(e.exp) == 1:
+#                     return e.base
+#                 return e
+
+#             # Apply recursively
+#             return expr.replace(
+#                 lambda e: isinstance(e, sp.Pow),
+#                 flatten_pow_chain,
+#             )
+
+#         if crung == 0:
+#             self.start_time = time()
+#             symbols, names, X = self.remove_redundant_features(
+#                 X=X, names=names, symbols=symbols
+#             )
+#         if crung == self.rung:
+#             if verbose:
+#                 print("Completed {0} rounds of feature transformations".format(self.rung))
+#             return symbols, names, X
+#         else:
+#             if verbose:
+#                 print("Applying round {0} of feature transformations".format(crung + 1))
+
+#             # --- CHANGED: chunk lists instead of growing arrays ---
+#             new_names_list, new_symbols_list, new_X_list = [], [], []
+
+#             for (op_key, rung_range) in self.ops:
+#                 if crung in rung_range:
+#                     if verbose > 1:
+#                         print("Applying operator {0} to {1} features".format(op_key, X.shape[1]))
+#                     op_params = OP_DICT[op_key]
+#                     op_sym, op_np, inputs, comm = (
+#                         op_params["op"],
+#                         op_params["op_np"],
+#                         op_params["inputs"],
+#                         op_params["commutative"],
+#                     )
+
+#                     if inputs == 1:
+#                         sym_vect = np.vectorize(op_sym)
+#                         new_op_symbols = sym_vect(symbols[prev_p:])
+#                         new_op_X = op_np(X[:, prev_p:])
+#                         new_op_names = str_vectorize(new_op_symbols)
+
+#                         new_names_list, new_symbols_list, new_X_list = self.add_new(
+#                             new_names_list=new_names_list,
+#                             new_symbols_list=new_symbols_list,
+#                             new_X_list=new_X_list,
+#                             new_name=new_op_names,
+#                             new_symbol=new_op_symbols,
+#                             new_X_i=new_op_X,
+#                             verbose=verbose,
+#                         )
+
+#                     elif inputs == 2:
+#                         p = X.shape[1]
+
+#                         if prev_p == 0:
+#                             # First round: allow base×base interactions
+#                             idx1_range = range(0, p)
+
+#                             if comm:
+#                                 # unordered pairs i<j (no self)
+#                                 for i in idx1_range:
+#                                     js = range(i + 1, p)
+#                                     if js.start >= js.stop:
+#                                         continue
+
+#                                     new_op_symbols = np.array(
+#                                         [op_sym(symbols[i], symbols[j]) for j in js],
+#                                         dtype=object,
+#                                     )
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names_list, new_symbols_list, new_X_list = self.add_new(
+#                                         new_names_list,
+#                                         new_symbols_list,
+#                                         new_X_list,
+#                                         new_op_names,
+#                                         new_op_symbols,
+#                                         new_op_X,
+#                                         verbose=verbose,
+#                                     )
+#                             else:
+#                                 # directed pairs i!=j (no self)
+#                                 for i in idx1_range:
+#                                     js = [j for j in range(0, p) if j != i]
+#                                     if not js:
+#                                         continue
+
+#                                     new_op_symbols = np.array(
+#                                         [op_sym(symbols[i], symbols[j]) for j in js],
+#                                         dtype=object,
+#                                     )
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names_list, new_symbols_list, new_X_list = self.add_new(
+#                                         new_names_list,
+#                                         new_symbols_list,
+#                                         new_X_list,
+#                                         new_op_names,
+#                                         new_op_symbols,
+#                                         new_op_X,
+#                                         verbose=verbose,
+#                                     )
+
+#                         else:
+#                             # Later rounds: only NEW×OLD to avoid redoing old–old and commutative duplicates
+#                             old = range(0, prev_p)
+#                             new = range(prev_p, p)
+
+#                             if comm:
+#                                 for i in new:
+#                                     js = old  # i != j guaranteed since sets disjoint
+#                                     new_op_symbols = np.array(
+#                                         [op_sym(symbols[i], symbols[j]) for j in js],
+#                                         dtype=object,
+#                                     )
+#                                     if new_op_symbols.size == 0:
+#                                         continue
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names_list, new_symbols_list, new_X_list = self.add_new(
+#                                         new_names_list,
+#                                         new_symbols_list,
+#                                         new_X_list,
+#                                         new_op_names,
+#                                         new_op_symbols,
+#                                         new_op_X,
+#                                         verbose=verbose,
+#                                     )
+#                             else:
+#                                 # directed both ways, still no self
+#                                 # (new op old)
+#                                 for i in new:
+#                                     js = old
+#                                     new_op_symbols = np.array(
+#                                         [op_sym(symbols[i], symbols[j]) for j in js],
+#                                         dtype=object,
+#                                     )
+#                                     if new_op_symbols.size == 0:
+#                                         continue
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names_list, new_symbols_list, new_X_list = self.add_new(
+#                                         new_names_list,
+#                                         new_symbols_list,
+#                                         new_X_list,
+#                                         new_op_names,
+#                                         new_op_symbols,
+#                                         new_op_X,
+#                                         verbose=verbose,
+#                                     )
+
+#                                 # (old op new)
+#                                 for j in old:
+#                                     is_ = new
+#                                     new_op_symbols = np.array(
+#                                         [op_sym(symbols[j], symbols[i]) for i in is_],
+#                                         dtype=object,
+#                                     )
+#                                     if new_op_symbols.size == 0:
+#                                         continue
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, j][:, None], X[:, is_])
+
+#                                     new_names_list, new_symbols_list, new_X_list = self.add_new(
+#                                         new_names_list,
+#                                         new_symbols_list,
+#                                         new_X_list,
+#                                         new_op_names,
+#                                         new_op_symbols,
+#                                         new_op_X,
+#                                         verbose=verbose,
+#                                     )
+#             if verbose: print('Concatenating features from the end of rung {0} of expansion'.format(crung))
+#             # --- CHANGED: single concat/hstack at end of this rung ---
+#             if len(new_names_list) > 0:
+#                 new_names = np.concatenate(new_names_list, axis=0)
+#                 new_symbols = np.concatenate(new_symbols_list, axis=0)
+#                 new_X = np.hstack(new_X_list) if len(new_X_list) > 1 else new_X_list[0]
+
+#                 names = np.concatenate((names, new_names))
+#                 symbols = np.concatenate((symbols, new_symbols))
+#                 prev_p = X.shape[1]
+#                 X = np.hstack([X, new_X])
+#             else:
+#                 prev_p = X.shape[1]
+
+#             if verbose:
+#                 print(
+#                     "After applying rounds {0} of feature transformations there are {1} features".format(
+#                         crung + 1, X.shape[1]
+#                     )
+#                 )
+#             if verbose:
+#                 print("Removing redundant features leaves... ", end="")
+
+#             symbols, names, X = self.remove_redundant_features(
+#                 X=X, names=names, symbols=symbols
+#             )
+#             if verbose:
+#                 print("{0} features".format(X.shape[1]))
+
+#             return self.expand_aux(
+#                 X=X,
+#                 names=names,
+#                 symbols=symbols,
+#                 crung=crung + 1,
+#                 prev_p=prev_p,
+#                 verbose=verbose,
+#             )
+
+
+# class FeatureExpansion:
+#     def __init__(self, ops, rung, printrate=1000):
+#         self.ops = ops
+#         self.rung = rung
+#         self.printrate = printrate
+#         self.prev_print = 0
+#         for i, op in enumerate(self.ops):
+#             if type(op) == str:
+#                 self.ops[i] = (op, range(rung))
+        
+#     def remove_redundant_features(self, symbols, names, X):
+#         sorted_idxs = np.argsort(names)
+#         for i, idx in enumerate(sorted_idxs):
+#             if i == 0:
+#                 unique = [idx]
+#             elif names[idx] != names[sorted_idxs[i-1]]:
+#                 unique += [idx]
+#         unique_original_order = np.sort(unique)
+        
+#         return symbols[unique_original_order], names[unique_original_order], X[:, unique_original_order]
+    
+#     def expand(self, X, y=None, names=None, verbose=False, f=None, check_pos=False):
+#         n, p = X.shape
+#         if (names is None) or (len(names) != p):
+#             names = ['x_{0}'.format(i) for i in range(X.shape[1])]
+        
+#         if check_pos == False:
+#             symbols = sp.symbols(' '.join(name.replace(' ', '.') for name in names))
+#         else:
+#             symbols = []
+#             for i, name in enumerate(names):
+#                 name = name.replace(' ', '.')
+#                 if np.all(X[:, i] > 0):
+#                     sym = sp.symbols(name, real=True, positive=True)
+#                 else:
+#                     sym = sp.symbols(name, real=True)               
+#                 symbols.append(sym)
+
+#         symbols = np.array(symbols)
+#         names = np.array(names)
+        
+#         if verbose: print('Estimating the creation of around {0} features'.format(self.estimate_workload(p=p, max_rung=self.rung, verbose=verbose>2)))
+        
+#         names, symbols, X = self.expand_aux(X=X, names=names, symbols=symbols, crung=0, prev_p=0, verbose=verbose)
+
+#         if not(f is None):
+#             import pandas as pd
+#             df = pd.DataFrame(data=X, columns=names)
+#             df['y'] = y
+#             df.to_csv(f)
+
+#         return names, symbols, X
+        
+#     def estimate_workload(self, p, max_rung,verbose=False):
+#         p0 = 0
+#         p1 = p
+#         for rung in range(max_rung):
+#             if verbose: print('Applying rung {0} expansion'.format(rung))
+#             new_u, new_bc, new_bn = 0, 0, 0
+#             for (op, rung_range) in self.ops:
+#                 if rung in rung_range:
+#                     if verbose: print('Applying {0} to {1} features will result in approximately '.format(op, p1-p0))
+#                     if OP_DICT[op]['inputs'] == 1:
+#                         new_u += p1
+#                         if verbose: print('{0} new features'.format(p1))
+#                     elif OP_DICT[op]['commutative'] == True:
+#                         new_bc += (1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)
+#                         if verbose: print('{0} new features'.format((1/2)*(p1 - p0 + 1)*(p0 + p1 + 2)))
+#                     else:
+#                         new_bn += (p1 - p0 + 1)*(p0 + p1 + 2)
+#                         if verbose: print('{0} new features'.format((p1 - p0 + 1)*(p0 + p1 + 2)))
+#             p0 = p1
+#             p1 = p1 + new_u + new_bc + new_bn
+#             if verbose: print('For a total of {0} features by rung {1}'.format(p1, rung))
+#         return p1
+        
+#     def add_new(self, new_names, new_symbols, new_X, new_name, new_symbol, new_X_i, verbose=False):
+#         valid = (np.isnan(new_X_i).sum(axis=0) + np.isposinf(new_X_i).sum(axis=0) + np.isneginf(new_X_i).sum(axis=0)) == 0
+#         if new_names is None:
+#             new_names = np.array(new_name[valid])
+#             new_symbols = np.array(new_symbol[valid])
+#             new_X = np.array(new_X_i[:, valid])
+#         else:
+#             new_names = np.concatenate((new_names, new_name[valid]))
+#             new_symbols = np.concatenate((new_symbols, new_symbol[valid]))
+#             new_X = np.hstack([new_X, new_X_i[:, valid]])
+# #        if (verbose > 1) and not(new_names is None) and (len(new_names) % self.printrate == 0): print('Created {0} features so far'.format(len(new_names)))
+#         if (verbose > 1) and not(new_names is None) and (len(new_names) - self.prev_print >= self.printrate):
+#             self.prev_print = len(new_names)
+#             elapsed = np.round(time() - self.start_time, 2)
+#             print('Created {0} features so far in {1} seconds'.format(len(new_names),elapsed))
+#         return new_names, new_symbols, new_X
+
+#     def expand_aux(self, X, names, symbols, crung, prev_p, verbose=False):
+        
+#         str_vectorize = np.vectorize(str)
+
+#         def simplify_nested_powers(expr):
+#             # Replace (x**n)**(1/n) with x
+#             def flatten_pow_chain(e):
+#                 if isinstance(e, sp.Pow) and isinstance(e.base, sp.Pow):
+#                     base, inner_exp = e.base.args
+#                     outer_exp = e.exp
+#                     combined_exp = inner_exp * outer_exp
+#                     if sp.simplify(combined_exp) == 1:
+#                         return base
+#                     return sp.Pow(base, combined_exp)
+#                 elif isinstance(e, sp.Pow) and sp.simplify(e.exp) == 1:
+#                     return e.base
+#                 return e
+#             # Apply recursively
+#             return expr.replace(
+#                 lambda e: isinstance(e, sp.Pow),
+#                 flatten_pow_chain
+#             )
+        
+#         if crung == 0:
+#             self.start_time = time()
+#             symbols, names, X = self.remove_redundant_features(X=X, names=names, symbols=symbols)
+#         if crung==self.rung:
+#             if verbose: print('Completed {0} rounds of feature transformations'.format(self.rung))
+#             return symbols, names, X
+#         else:
+#             if verbose: print('Applying round {0} of feature transformations'.format(crung+1))
+# #            if verbose: print('Estimating the creation of {0} features this iteration'.format(self.estimate_workload(p=X.shape[1], max_rung=1)))
                 
-            if verbose: print('After applying rounds {0} of feature transformations there are {1} features'.format(crung+1, X.shape[1]))
-            if verbose: print('Removing redundant features leaves... ', end='')            
-            symbols, names, X = self.remove_redundant_features(X=X, names=names, symbols=symbols)
-            if verbose: print('{0} features'.format(X.shape[1]))
+#             new_names, new_symbols, new_X = None, None, None
+            
+#             for (op_key, rung_range) in self.ops:
+#                 if crung in rung_range:
+#                     if verbose>1: print('Applying operator {0} to {1} features'.format(op_key, X.shape[1]))
+#                     op_params = OP_DICT[op_key]
+#                     op_sym, op_np, inputs, comm = op_params['op'], op_params['op_np'], op_params['inputs'], op_params['commutative']
+#                     if inputs == 1:
+#                         sym_vect = np.vectorize(op_sym)
+#                         new_op_symbols = sym_vect(symbols[prev_p:])
+#                         new_op_X = op_np(X[:, prev_p:])
+#                         new_op_names = str_vectorize(new_op_symbols)
+#                         new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
+#                                                                     new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
+#                     elif inputs == 2:
+#                         p = X.shape[1]
 
-            return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
+#                         if prev_p == 0:
+#                             # First round: allow base×base interactions
+#                             idx1_range = range(0, p)
+
+#                             if comm:
+#                                 # unordered pairs i<j (no self)
+#                                 for i in idx1_range:
+#                                     js = range(i + 1, p)
+#                                     if js.start >= js.stop:
+#                                         continue
+
+#                                     new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names, new_symbols, new_X = self.add_new(
+#                                         new_names, new_symbols, new_X,
+#                                         new_op_names, new_op_symbols, new_op_X, verbose=verbose
+#                                     )
+#                             else:
+#                                 # directed pairs i!=j (no self)
+#                                 for i in idx1_range:
+#                                     js = [j for j in range(0, p) if j != i]
+#                                     if not js:
+#                                         continue
+
+#                                     new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names, new_symbols, new_X = self.add_new(
+#                                         new_names, new_symbols, new_X,
+#                                         new_op_names, new_op_symbols, new_op_X, verbose=verbose
+#                                     )
+
+#                         else:
+#                             # Later rounds: only NEW×OLD to avoid redoing old–old and commutative duplicates
+#                             old = range(0, prev_p)
+#                             new = range(prev_p, p)
+
+#                             if comm:
+#                                 for i in new:
+#                                     js = old  # i != j guaranteed since sets disjoint
+#                                     new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+#                                     if new_op_symbols.size == 0:
+#                                         continue
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names, new_symbols, new_X = self.add_new(
+#                                         new_names, new_symbols, new_X,
+#                                         new_op_names, new_op_symbols, new_op_X, verbose=verbose
+#                                     )
+#                             else:
+#                                 # directed both ways, still no self
+#                                 # (new op old)
+#                                 for i in new:
+#                                     js = old
+#                                     new_op_symbols = np.array([op_sym(symbols[i], symbols[j]) for j in js], dtype=object)
+#                                     if new_op_symbols.size == 0:
+#                                         continue
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, i][:, None], X[:, js])
+
+#                                     new_names, new_symbols, new_X = self.add_new(
+#                                         new_names, new_symbols, new_X,
+#                                         new_op_names, new_op_symbols, new_op_X, verbose=verbose
+#                                     )
+
+#                                 # (old op new)
+#                                 for j in old:
+#                                     is_ = new
+#                                     new_op_symbols = np.array([op_sym(symbols[j], symbols[i]) for i in is_], dtype=object)
+#                                     if new_op_symbols.size == 0:
+#                                         continue
+#                                     new_op_names = str_vectorize(new_op_symbols)
+#                                     new_op_X = op_np(X[:, j][:, None], X[:, is_])
+
+#                                     new_names, new_symbols, new_X = self.add_new(
+#                                         new_names, new_symbols, new_X,
+#                                         new_op_names, new_op_symbols, new_op_X, verbose=verbose
+#                                     )
+
+#                     # elif inputs == 2:
+#                     #     for idx1 in range(prev_p, X.shape[1]):
+#                     #         sym_vect = np.vectorize(lambda idx2: op_sym(symbols[idx1], symbols[idx2]))
+#                     #         idx2 = range(idx1 if comm else X.shape[1])
+#                     #         if len(idx2) > 0: 
+#                     #             new_op_symbols = sym_vect(idx2)
+#                     #             new_op_names = str_vectorize(new_op_symbols)
+#                     #             X_i = X[:, idx1]
+#                     #             new_op_X = op_np(X_i[:, np.newaxis], X[:, idx2]) #X_i[:, np.newaxis]*X[:, idx2]                                                
+#                     #             new_names, new_symbols, new_X = self.add_new(new_names=new_names, new_symbols=new_symbols, new_X=new_X, 
+#                     #                                                     new_name=new_op_names, new_symbol=new_op_symbols, new_X_i=new_op_X, verbose=verbose)
+#             if not(new_names is None):                
+#                 names = np.concatenate((names, new_names))
+#                 symbols = np.concatenate((symbols, new_symbols))
+#                 prev_p = X.shape[1]
+#                 X = np.hstack([X, new_X])
+#             else:
+#                 prev_p = X.shape[1]
+                
+#             if verbose: print('After applying rounds {0} of feature transformations there are {1} features'.format(crung+1, X.shape[1]))
+#             if verbose: print('Removing redundant features leaves... ', end='')            
+#             symbols, names, X = self.remove_redundant_features(X=X, names=names, symbols=symbols)
+#             if verbose: print('{0} features'.format(X.shape[1]))
+
+#             return self.expand_aux(X=X, names=names, symbols=symbols, crung=crung+1, prev_p=prev_p, verbose=verbose)
     
