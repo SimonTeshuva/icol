@@ -13,6 +13,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import log_loss, zero_one_loss, hinge_loss, roc_auc_score
 from sklearn.linear_model import LogisticRegression
 
+from itertools import combinations, permutations
+
 def rmse(y_true, y_pred):
     return np.sqrt(np.mean((y_true - y_pred) ** 2))
 
@@ -83,7 +85,113 @@ class generalised_SIS:
 
         chosen = np.array(chosen, dtype=int)
         return scores[chosen], chosen
-        
+
+class THRESHOLDED_LOGISTIC_REGRESSION:
+    def __init__(self, random_state):
+        self.random_state = random_state
+
+    def __str__(self):
+        return "THRESHOLDED_LOGISTIC_REGRESSION"
+    
+    def get_params(self, deep=True):
+        return {'random_state': self.random_state}
+    
+    def fit(self, X, y, d, feature_names=None, verbose=False):
+        if feature_names is None: feature_names = np.array(['X{0}'.format(i) for i in range(X.shape[1])])
+
+        LR = LogisticRegression(penalty=None, fit_intercept=False, random_state=self.random_state)
+        if verbose: print('Fitting on full candidate pool')
+        LR.fit(X, y)
+        if verbose: print('Selecting top {0} candidates'.format(d))
+        beta_hat_all = np.abs(LR.coef_.squeeze())
+        idxs = np.argsort(beta_hat_all)[::-1]
+        use_idxs = idxs[:d]
+        if verbose: print('Fitting on selected candidates')
+        LR.fit(X[:, use_idxs], y)
+        if verbose: print('Saving sparse base estimator')
+        beta_hat_sparse = LR.coef_.squeeze()
+        beta_hat = np.zeros(X.shape[1])
+        beta_hat[use_idxs] = beta_hat_sparse
+        self.coef_ = beta_hat
+        self.feature_names = feature_names[use_idxs]
+        self.model = LR
+        return self
+
+    def __repr__(self, prec=3):
+        return self.__str__()
+
+    def decision_function(self, X):
+        return np.dot(X, self.coef_.ravel())
+    
+    def predict_proba(self, X):
+        z = self.decision_function(X)
+        z = np.clip(z, -self.clp, self.clp)  # numerical stability
+        p1 = 1.0 / (1.0 + np.exp(-z))
+        p0 = 1.0 - p1
+        return np.column_stack([p0, p1])
+    
+    def predict(self, X , threshold=0.5):
+        proba = self.predict_proba(X)
+        p1 = proba[:, 1]
+        return (p1 >= threshold).astype(int)
+
+class BSS_LOGISTIC:
+    def __init__(self, random_state, metric='logloss'):
+        self.random_state = random_state
+        self.metric = metric
+        self.loss = LOSS_DICT[metric]
+
+    def __str__(self):
+        return "THRESHOLDED_LOGISTIC_REGRESSION"
+    
+    
+    def fit(self, X, y, d, feature_names=None, verbose=False):
+        if feature_names is None: feature_names = np.array(['X{0}'.format(i) for i in range(X.shape[1])])
+        n, p  = X.shape
+        all_comb = combinations(range(p), d)
+        base = LogisticRegression(penalty=None, fit_intercept=False, random_state=self.random_state)
+        best_i, best_comb, best_loss, best_coef = None, None, None, None
+        for i, comb in enumerate(all_comb):
+            if verbose: print('Attempting Combination: {0}'.format(comb))
+            LR = clone(base)
+            LR.fit(X[:, comb], y)
+            y_hat = LR.predict(X[:, comb])
+            loss = self.loss(y, y_hat)
+            if (best_i is None) or (loss < best_loss):
+                best_i, best_comb, best_loss, best_coef = i, comb, loss, LR.coef_
+
+        if verbose: print('The best combination was {0} with a loss of {1}'.format(best_comb, best_loss))
+        self.use_idxs = list(best_comb)
+        beta_hat_sparse = best_coef.ravel()
+        beta_hat = np.zeros(X.shape[1])
+        beta_hat[self.use_idxs] = beta_hat_sparse
+        self.coef_ = beta_hat
+        self.feature_names = feature_names[self.use_idxs]
+        if verbose: print('Corresponding to the features: {0}'.format(str(self.feature_names)))
+        return self
+    
+    def __repr__(self, prec=3):
+        return self.__str__()
+    
+    def get_params(self, deep=True):
+        return {'random_state': self.random_state,
+                'metric': self.metric}
+
+    def decision_function(self, X):
+        return np.dot(X, self.coef_.ravel())
+    
+    def predict_proba(self, X):
+        z = self.decision_function(X)
+        z = np.clip(z, -self.clp, self.clp)  # numerical stability
+        p1 = 1.0 / (1.0 + np.exp(-z))
+        p0 = 1.0 - p1
+        return np.column_stack([p0, p1])
+    
+    def predict(self, X , threshold=0.5):
+        proba = self.predict_proba(X)
+        p1 = proba[:, 1]
+        return (p1 >= threshold).astype(int)
+
 class LOGISTIC_ADALASSO:
     def __init__(self, log_c_lo=-4, log_c_hi=3, c_num=100,  solver="saga",
                  class_weight=None, max_iter=5000, tol=1e-4, eps_nnz=1e-12, 
@@ -137,7 +245,6 @@ class LOGISTIC_ADALASSO:
             LR.fit(X_valcols, y)
             beta_hat = LR.coef_.squeeze()
             if beta_hat.shape == ():
-                print('bad shape')
                 beta_hat = beta_hat.reshape(-1, 1)
             
             w_hat = 1/np.power(np.abs(beta_hat), self.gamma).ravel()
@@ -163,7 +270,6 @@ class LOGISTIC_ADALASSO:
         self.coef_idx_ = np.arange(len(beta_hat_star_star))[np.abs(np.ravel(beta_hat_star_star)) > self.eps_nnz]
 
         beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
-
 
         beta_hat_star_n = np.zeros(X.shape[1])
         beta_hat_star_n[valcols] = beta_hat_star_n_valcol
