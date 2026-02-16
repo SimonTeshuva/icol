@@ -65,6 +65,12 @@ def count_nnz(coef, eps_nnz):
     return int(np.sum(np.abs(np.ravel(coef)) > eps_nnz))
     
 def linear_search(models, X, y, d, eps_nnz=1e-3, verbose=False):
+    if X.shape[1] <= d:
+        mid = -1
+        best = -1
+        models[mid].fit(X, y)
+        return best, models
+
     best_idx = 0
     for i, model in enumerate(models):
         if verbose: print('Fitting model {0} of {1} with C={2} and has '.format(i, len(models), model.C), end='')
@@ -83,6 +89,12 @@ def binary_search(models, X, y, d, eps_nnz=1e-3, verbose=False):
     best = None
     count = 0
 
+    if X.shape[1] <= d:
+        mid = -1
+        best = -1
+        models[mid].fit(X, y)
+        return best, models
+    
     while start <= stop and count < len(models):
         mid = (start + stop) // 2
         if verbose:
