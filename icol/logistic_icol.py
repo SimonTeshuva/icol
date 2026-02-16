@@ -60,6 +60,51 @@ LOSS_DICT = {
     'logistic': log_loss
 }
 
+
+def count_nnz(coef, eps_nnz):
+    return int(np.sum(np.abs(np.ravel(coef)) > eps_nnz))
+    
+def linear_search(models, X, y, d, eps_nnz=1e-3, verbose=False):
+    best_idx = 0
+    for i, model in enumerate(models):
+        if verbose: print('Fitting model {0} of {1} with C={2} and has '.format(i, len(models), model.C), end='')
+        model.fit(X, y)
+        nnz = count_nnz(model.coef_, eps_nnz)
+        if verbose: print('{0} nonzero terms'.format(nnz))
+        if nnz<=d:
+            best_idx = i
+        else:
+            break
+    return best_idx, models
+
+
+def binary_search(models, X, y, d, eps_nnz=1e-3, verbose=False):
+    start, stop = 0, len(models) - 1
+    best = None
+    count = 0
+
+    while start <= stop and count < len(models):
+        mid = (start + stop) // 2
+        if verbose:
+            print(f'Fitting model {count} of {len(models)} with C={models[mid].C} and has ', end='')
+        models[mid].fit(X, y)
+        nnz = count_nnz(models[mid].coef_, eps_nnz)
+        if verbose:
+            print(f'{nnz} nonzero terms')
+        if nnz <= d:
+            best = mid         
+            start = mid + 1
+        else:
+            stop = mid - 1
+        count += 1
+    return (best if best is not None else 0), models
+
+
+SEARCH_DICT = {
+    'linear': linear_search,
+    'binary': binary_search
+}
+
 class generalised_SIS:
     def __init__(self, s, obj='squared'):
         self.s=s
@@ -192,10 +237,12 @@ class BSS_LOGISTIC:
         p1 = proba[:, 1]
         return (p1 >= threshold).astype(int)
 
+
+
 class LOGISTIC_ADALASSO:
     def __init__(self, log_c_lo=-4, log_c_hi=3, c_num=100,  solver="saga",
                  class_weight=None, max_iter=5000, tol=1e-4, eps_nnz=1e-12, 
-                 clp=np.infty, random_state=None, gamma=1):
+                 clp=np.infty, random_state=None, gamma=1, search_C = 'linear'):
         self.log_c_lo = log_c_lo
         self.log_c_hi = log_c_hi
         self.c_num= c_num
@@ -208,6 +255,7 @@ class LOGISTIC_ADALASSO:
         self.random_state = random_state
         self.clp = clp
         self.gamma = gamma
+        self.search_C = search_C
 
         self.models = np.array([LogisticRegression(C=c, 
                            solver=self.solver, class_weight=self.class_weight, 
@@ -226,7 +274,8 @@ class LOGISTIC_ADALASSO:
             "tol": self.tol,
             "eps_nnz": self.eps_nnz,
             "random_state": self.random_state,
-            'clp': self.clp
+            'clp': self.clp,
+            'search_C': self.search_C
         }
 
     def fit(self, X, y, d, feature_names=None, verbose=False):
@@ -253,16 +302,18 @@ class LOGISTIC_ADALASSO:
                 X_j = X_valcols[:, j]/w_hat[j]
                 X_star_star[:, j] = X_j
 
-        best_idx = 0
-        for i, model in enumerate(self.models):
-            if verbose: print('Fitting model {0} of {1} with C={2} and has '.format(i, len(self.models), model.C), end='')
-            model.fit(X_star_star, y)
-            nnz = self._count_nnz(model.coef_)
-            if verbose: print('{0} nonzero terms'.format(nnz))
-            if nnz<=d:
-                best_idx = i
-            else:
-                break
+        # best_idx = 0
+        # for i, model in enumerate(self.models):
+        #     if verbose: print('Fitting model {0} of {1} with C={2} and has '.format(i, len(self.models), model.C), end='')
+        #     model.fit(X_star_star, y)
+        #     nnz = self._count_nnz(model.coef_)
+        #     if verbose: print('{0} nonzero terms'.format(nnz))
+        #     if nnz<=d:
+        #         best_idx = i
+        #     else:
+        #         break
+
+        best_idx, fitted_models = SEARCH_DICT[self.search_C](models=self.models, X=X_star_star, y=y, d=d, eps_nnz=self.eps_nnz, verbose=verbose)
 
         self.model_idx = best_idx
         beta_hat_star_star = self.models[self.model_idx].coef_.ravel()
