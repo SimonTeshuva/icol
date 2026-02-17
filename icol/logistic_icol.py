@@ -306,7 +306,7 @@ class LOGISTIC_ADALASSO:
             if beta_hat.shape == ():
                 beta_hat = beta_hat.reshape(-1, 1)
             
-            w_hat = 1/np.power(np.abs(beta_hat), self.gamma).ravel()
+            w_hat = 1/np.power(np.abs(beta_hat)+self.eps_nnz, self.gamma).ravel()
             X_star_star = X_valcols / w_hat
 
         # best_idx = 0

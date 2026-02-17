@@ -219,7 +219,7 @@ class BSS:
         return beta_ret
 
 class EfficientAdaptiveLASSO:
-    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0):
+    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0, eps=0):
         self.gamma = gamma
         self.fit_intercept = fit_intercept
         self.default_d = default_d
@@ -229,6 +229,7 @@ class EfficientAdaptiveLASSO:
         self.XT = None
         self.beta_ols = None
         self.active_idx = None
+        self.eps=eps
 
     def __str__(self):
         return ('EffAda' if self.gamma != 0 else '') + ('LASSO') + ('(gamma={0})'.format(self.gamma) if self.gamma != 0 else '')
@@ -266,7 +267,7 @@ class EfficientAdaptiveLASSO:
                                                                                           XT=self.XT, active_idx=self.active_idx, D=X, y=y, 
                                                                                           new_idx=idx_new)
 
-            w_hat = 1/np.power(np.abs(self.beta_ols), self.gamma)
+            w_hat = 1/np.power(np.abs(self.beta_ols)+self.eps, self.gamma)
             X_star_star = X_valcols / w_hat
 
             # X_star_star = np.zeros_like(X_valcols[:, idx_ala])
@@ -304,12 +305,13 @@ class EfficientAdaptiveLASSO:
             return c1*min(np.power(p, 1/2)/k, np.power(p*n, 1/3)/k) + c0
 
 class AdaptiveLASSO:
-    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0):
+    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0, eps=0):
         self.gamma = gamma
         self.fit_intercept = fit_intercept
         self.default_d = default_d
         self.rcond=rcond
-        self.alpha=0
+        self.alpha=alpha
+        self.eps = eps
 
     def __str__(self):
         return ('Ada' if self.gamma != 0 else '') + ('LASSO') + ('(gamma={0})'.format(self.gamma) if self.gamma != 0 else '')
@@ -342,7 +344,7 @@ class AdaptiveLASSO:
             X_valcols = X[:, valcols]
             beta_hat, _, _, _ = np.linalg.lstsq(X_valcols, y, rcond=self.rcond)
 
-            w_hat = 1/np.power(np.abs(beta_hat), self.gamma)
+            w_hat = 1/np.power(np.abs(beta_hat)+self.eps, self.gamma)
             X_star_star = X_valcols / w_hat
             # X_star_star = np.zeros_like(X_valcols)
             # for j in range(X_star_star.shape[1]): # vectorise
