@@ -252,7 +252,8 @@ class BSS_LOGISTIC:
 class LOGISTIC_ADALASSO:
     def __init__(self, log_c_lo=-4, log_c_hi=3, c_num=100,  solver="saga",
                  class_weight=None, max_iter=5000, tol=1e-4, eps_nnz=1e-12, 
-                 clp=np.infty, random_state=None, gamma=1, search_C = 'linear'):
+                 clp=np.infty, random_state=None, gamma=1, search_C = 'linear', fit_intercept=False, 
+                 l1_ratio = 1, l2_for_weights=np.infty, w_clp=1e10):
         self.log_c_lo = log_c_lo
         self.log_c_hi = log_c_hi
         self.c_num= c_num
@@ -266,11 +267,15 @@ class LOGISTIC_ADALASSO:
         self.clp = clp
         self.gamma = gamma
         self.search_C = search_C
+        self.fit_intercept=fit_intercept
+        self.l1_ratio = l1_ratio
+        self.l2_for_weights = l2_for_weights
+        self.w_clp = w_clp
 
         self.models = np.array([LogisticRegression(C=c, 
-                           solver=self.solver, class_weight=self.class_weight, 
+                           solver=self.solver if self.l1_ratio==1 else 'saga', class_weight=self.class_weight, 
                            max_iter=self.max_iter, tol=self.tol, random_state=random_state,
-                           penalty='l1', l1_ratio=1, fit_intercept=False,  
+                           penalty='l1' if self.l1_ratio==1 else 'elasticnet', l1_ratio=self.l1_ratio, fit_intercept=self.fit_intercept,  
                            ) for c in self.C_grid], dtype=object)
         
     def get_params(self, deep=True):
@@ -285,7 +290,11 @@ class LOGISTIC_ADALASSO:
             "eps_nnz": self.eps_nnz,
             "random_state": self.random_state,
             'clp': self.clp,
-            'search_C': self.search_C
+            'search_C': self.search_C,
+            'fit_intercept': self.fit_intercept,
+            'l1_ratio': self.l1_ratio,
+            'l2_for_weights': self.l2_for_weights,
+            'w_clp': self.w_clp
         }
 
     def fit(self, X, y, d, feature_names=None, verbose=False):
@@ -300,13 +309,15 @@ class LOGISTIC_ADALASSO:
             X_star_star = X.copy()
         else:
             X_valcols = X[:, valcols]
-            LR = LogisticRegression(penalty=None, fit_intercept=False, random_state=self.random_state)
+            LR = LogisticRegression(penalty='l2', C=self.l2_for_weights, class_weight=self.class_weight,
+                                     fit_intercept=self.fit_intercept, random_state=self.random_state,
+                                     solver='lbfgs', max_iter=self.max_iter, tol=self.tol
+                                     )
             LR.fit(X_valcols, y)
-            beta_hat = LR.coef_.squeeze()
-            if beta_hat.shape == ():
-                beta_hat = beta_hat.reshape(-1, 1)
+            beta_hat = LR.coef_.ravel()
             
             w_hat = 1/np.power(np.abs(beta_hat)+self.eps_nnz, self.gamma).ravel()
+            w_hat = np.clip(w_hat, 1/self.w_clp, self.w_clp)
             X_star_star = X_valcols / w_hat
 
         # best_idx = 0
@@ -327,14 +338,18 @@ class LOGISTIC_ADALASSO:
 
         self.coef_idx_ = np.arange(len(beta_hat_star_star))[np.abs(np.ravel(beta_hat_star_star)) > self.eps_nnz]
 
-        beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+        # beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+        beta_hat_star_n_valcol = beta_hat_star_star / w_hat
 
         beta_hat_star_n = np.zeros(X.shape[1])
         beta_hat_star_n[valcols] = beta_hat_star_n_valcol
         
         self.coef_ = beta_hat_star_n
         self.model = self.models[self.model_idx]
-        self.model.coef_ = self.coef_
+        self.model.coef_ = self.coef_.reshape(1, -1)
+
+        self.intercept_ = float(self.models[self.model_idx].intercept_[0]) if self.fit_intercept else 0.0
+        self.model.intercept_ = np.array([self.intercept_])
 
         return self
     
@@ -344,13 +359,14 @@ class LOGISTIC_ADALASSO:
             ))
     
     def __str__(self):
-        return "Logistic{0}Lasso".format("Ada" if np.abs(self.gamma)>=1e-10 else '')
+        pen = "Lasso" if self.l1_ratio == 1 else f"ENet({self.l1_ratio:g})"
+        return f"Logistic{'Ada' if abs(self.gamma) >= 1e-10 else ''}{pen}"
     
     def __repr__(self, prec=3):
         return self.__str__()
 
     def decision_function(self, X):
-        return np.dot(X, self.model.coef_.ravel())
+        return np.dot(X, self.model.coef_.ravel()) + self.intercept_
     
     def predict_proba(self, X):
         z = self.decision_function(X)

@@ -19,132 +19,134 @@ def rmse(y_true, y_pred):
 
 def LL(res):
     n = len(res)
-    return n*np.log(np.sum(res**2)/n)
+#     return n*np.log(np.sum(res**2)/n)
 
-def initialize_ols(D, y, init_idx):
-    """
-    Fit initial OLS solution on selected columns of D.
+# def initialize_ols(D, y, init_idx):
+#     """
+#     Fit initial OLS solution on selected columns of D.
     
-    Parameters
-    ----------
-    D : (n, d) ndarray
-        Full dictionary matrix.
-    y : (n,) ndarray
-        Response vector.
-    init_idx : list[int]
-        Indices of columns from D to use initially.
+#     Parameters
+#     ----------
+#     D : (n, d) ndarray
+#         Full dictionary matrix.
+#     y : (n,) ndarray
+#         Response vector.
+#     init_idx : list[int]
+#         Indices of columns from D to use initially.
     
-    Returns
-    -------
-    beta : (p,) ndarray
-        OLS coefficients for selected columns.
-    A_inv : (p, p) ndarray
-        Inverse Gram matrix for selected columns.
-    XT : (p, n) ndarray
-        Transposed design matrix of selected columns.
-    active_idx : list[int]
-        Current indices of D included in the model.
-    """
-    X = D[:, init_idx]
-    A = X.T @ X
-    try: 
-        A_inv = np.linalg.inv(A)
-    except np.linalg.LinAlgError:
-        A_inv = np.linalg.pinv(A)
-    beta = A_inv @ (X.T @ y)
-    XT = X.T
-    return beta, A_inv, XT, list(init_idx)
+#     Returns
+#     -------
+#     beta : (p,) ndarray
+#         OLS coefficients for selected columns.
+#     A_inv : (p, p) ndarray
+#         Inverse Gram matrix for selected columns.
+#     XT : (p, n) ndarray
+#         Transposed design matrix of selected columns.
+#     active_idx : list[int]
+#         Current indices of D included in the model.
+#     """
+#     X = D[:, init_idx]
+#     A = X.T @ X
+#     try: 
+#         A_inv = np.linalg.inv(A)
+#     except np.linalg.LinAlgError:
+#         A_inv = np.linalg.pinv(A)
+#     beta = A_inv @ (X.T @ y)
+#     XT = X.T
+#     return beta, A_inv, XT, list(init_idx)
 
-def sweep_update_from_D(beta, A_inv, XT, active_idx, D, y, new_idx):
-    # Generated with ChatGPT using the commands;
-    # 1. write me a function which takes in an n by p dimension matrix X, for which we already have an OLS solution, beta.
-    #  Additionally, a second input is a data matrix Z with n rows and q columns. 
-    # Add the Z matrix of columns to the OLS solution using SWEEP
-    # 2. Are we also able to efficiently update the gram and its inverse with this procedure for X augmented with Z
-    # 3. Ok, imagine that I need to update my SWEEP solution multiple times.
-    #  Adjust the inputs and return values so that everything can be used again in the next SWEEP update.
-    #  Then update the function to make use of these previous computations
-    # 4. Lets make some changes for the sake of indexing. Imagine that we have a large matrix D, with d columns.
-    # Through some selection procedure we select p of those columns to form an initial OLS solution.
-    # We then iteratively select p new columns and incorporate those into the ols solution using sweep. 
-    # Update the code to reflect this change while also tracking the indices of columns in the original D matrix 
-    # and their mapping to the respective betas.
+# def sweep_update_from_D(beta, A_inv, XT, active_idx, D, y, new_idx):
+#     # Generated with ChatGPT using the commands;
+#     # 1. write me a function which takes in an n by p dimension matrix X, for which we already have an OLS solution, beta.
+#     #  Additionally, a second input is a data matrix Z with n rows and q columns. 
+#     # Add the Z matrix of columns to the OLS solution using SWEEP
+#     # 2. Are we also able to efficiently update the gram and its inverse with this procedure for X augmented with Z
+#     # 3. Ok, imagine that I need to update my SWEEP solution multiple times.
+#     #  Adjust the inputs and return values so that everything can be used again in the next SWEEP update.
+#     #  Then update the function to make use of these previous computations
+#     # 4. Lets make some changes for the sake of indexing. Imagine that we have a large matrix D, with d columns.
+#     # Through some selection procedure we select p of those columns to form an initial OLS solution.
+#     # We then iteratively select p new columns and incorporate those into the ols solution using sweep. 
+#     # Update the code to reflect this change while also tracking the indices of columns in the original D matrix 
+#     # and their mapping to the respective betas.
 
-    """
-    Update OLS solution by adding new columns from D.
+#     """
+#     Update OLS solution by adding new columns from D.
     
-    Parameters
-    ----------
-    beta : (p,) ndarray
-        Current OLS coefficients.
-    A_inv : (p, p) ndarray
-        Inverse Gram matrix for current features.
-    XT : (p, n) ndarray
-        Transposed design matrix for current features.
-    active_idx : list[int]
-        Current indices of columns in D that are in the model.
-    D : (n, d) ndarray
-        Full dictionary matrix.
-    y : (n,) ndarray
-        Response vector.
-    new_idx : list[int]
-        Indices of new columns in D to add.
+#     Parameters
+#     ----------
+#     beta : (p,) ndarray
+#         Current OLS coefficients.
+#     A_inv : (p, p) ndarray
+#         Inverse Gram matrix for current features.
+#     XT : (p, n) ndarray
+#         Transposed design matrix for current features.
+#     active_idx : list[int]
+#         Current indices of columns in D that are in the model.
+#     D : (n, d) ndarray
+#         Full dictionary matrix.
+#     y : (n,) ndarray
+#         Response vector.
+#     new_idx : list[int]
+#         Indices of new columns in D to add.
     
-    Returns
-    -------
-    beta_new : (p+q,) ndarray
-        Updated OLS coefficients.
-    A_tilde_inv : (p+q, p+q) ndarray
-        Updated inverse Gram matrix.
-    XT_new : (p+q, n) ndarray
-        Updated design matrix transpose.
-    active_idx_new : list[int]
-        Updated indices of active columns in D.
-    """
-    p = beta.shape[0]
-    Z = D[:, new_idx]    # n x q
-    q = Z.shape[1]
+#     Returns
+#     -------
+#     beta_new : (p+q,) ndarray
+#         Updated OLS coefficients.
+#     A_tilde_inv : (p+q, p+q) ndarray
+#         Updated inverse Gram matrix.
+#     XT_new : (p+q, n) ndarray
+#         Updated design matrix transpose.
+#     active_idx_new : list[int]
+#         Updated indices of active columns in D.
+#     """
+#     p = beta.shape[0]
+#     Z = D[:, new_idx]    # n x q
+#     q = Z.shape[1]
 
-    # Cross products
-    B = XT @ Z                # p x q
-    C = Z.T @ Z               # q x q
-    yZ = Z.T @ y              # q x 1
+#     # Cross products
+#     B = XT @ Z                # p x q
+#     C = Z.T @ Z               # q x q
+#     yZ = Z.T @ y              # q x 1
 
-    # Schur complement
-    S = C - B.T @ (A_inv @ B)
+#     # Schur complement
+#     S = C - B.T @ (A_inv @ B)
 
-    # Solve for new coefficients (numerically stable)
-    rhs = yZ - B.T @ beta
-    try:
-        beta_Z = np.linalg.solve(S, rhs)
-    except np.linalg.LinAlgError:
-        beta_Z = np.linalg.pinv(S) @ rhs
+#     # Solve for new coefficients (numerically stable)
+#     rhs = yZ - B.T @ beta
+#     try:
+#         beta_Z = np.linalg.solve(S, rhs)
+#     except np.linalg.LinAlgError:
+#         beta_Z = np.linalg.pinv(S) @ rhs
 
-    # Update old coefficients
-    beta_X_new = beta - A_inv @ (B @ beta_Z)
-    beta_new = np.concatenate([beta_X_new, beta_Z])
+#     # Update old coefficients
+#     beta_X_new = beta - A_inv @ (B @ beta_Z)
+#     beta_new = np.concatenate([beta_X_new, beta_Z])
 
-    # Update Gram inverse
-    try: 
-        S_inv = np.linalg.inv(S)  # small q x q
-    except np.linalg.LinAlgError:
-        S_inv = np.linalg.pinv(S)
+#     # Update Gram inverse
+#     try: 
+#         S_inv = np.linalg.inv(S)  # small q x q
+#     except np.linalg.LinAlgError:
+#         S_inv = np.linalg.pinv(S)
 
-    top_left = A_inv + A_inv @ B @ S_inv @ B.T @ A_inv
-    top_right = -A_inv @ B @ S_inv
-    bottom_left = -S_inv @ B.T @ A_inv
-    bottom_right = S_inv
+#     top_left = A_inv + A_inv @ B @ S_inv @ B.T @ A_inv
+#     top_right = -A_inv @ B @ S_inv
+#     bottom_left = -S_inv @ B.T @ A_inv
+#     bottom_right = S_inv
 
-    A_tilde_inv = np.block([
-        [top_left, top_right],
-        [bottom_left, bottom_right]
-    ])
+#     A_tilde_inv = np.block([
+#         [top_left, top_right],
+#         [bottom_left, bottom_right]
+#     ])
 
-    # Update XT and active indices
-    XT_new = np.vstack([XT, Z.T])
-    active_idx_new = active_idx + list(new_idx)
+#     # Update XT and active indices
+#     XT_new = np.vstack([XT, Z.T])
+#     active_idx_new = active_idx + list(new_idx)
 
-    return beta_new, A_tilde_inv, XT_new, active_idx_new
+#     return beta_new, A_tilde_inv, XT_new, active_idx_new
+
+
 
 IC_DICT = {
     'AIC': lambda res, k: LL(res) + 2*k,
@@ -218,100 +220,102 @@ class BSS:
         beta_ret[list(best_comb)] = beta.reshape(1, -1)
         return beta_ret
 
-class EfficientAdaptiveLASSO:
-    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0, eps=0):
-        self.gamma = gamma
-        self.fit_intercept = fit_intercept
-        self.default_d = default_d
-        self.rcond=rcond
-        self.alpha=alpha
-        self.A_inv = None
-        self.XT = None
-        self.beta_ols = None
-        self.active_idx = None
-        self.eps=eps
+# class EfficientAdaptiveLASSO:
+#     def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0, eps=0):
+#         self.gamma = gamma
+#         self.fit_intercept = fit_intercept
+#         self.default_d = default_d
+#         self.rcond=rcond
+#         self.alpha=alpha
+#         self.A_inv = None
+#         self.XT = None
+#         self.beta_ols = None
+#         self.active_idx = None
+#         self.eps=eps
 
-    def __str__(self):
-        return ('EffAda' if self.gamma != 0 else '') + ('LASSO') + ('(gamma={0})'.format(self.gamma) if self.gamma != 0 else '')
+#     def __str__(self):
+#         return ('EffAda' if self.gamma != 0 else '') + ('LASSO') + ('(gamma={0})'.format(self.gamma) if self.gamma != 0 else '')
     
-    def __repr__(self):
-        return self.__str__()
+#     def __repr__(self):
+#         return self.__str__()
     
-    def get_params(self, deep=False):
-        return {'gamma': self.gamma,
-                'fit_intercept': self.fit_intercept,
-                'default_d': self.default_d,
-                'rcond': self.rcond}
+#     def get_params(self, deep=False):
+#         return {'gamma': self.gamma,
+#                 'fit_intercept': self.fit_intercept,
+#                 'default_d': self.default_d,
+#                 'rcond': self.rcond}
     
-    def set_default_d(self, d):
-        self.default_d = d
+#     def set_default_d(self, d):
+#         self.default_d = d
 
-    def __call__(self, X, y, d, idx_old = None, idx_new=None, verbose=False):
+#     def __call__(self, X, y, d, idx_old = None, idx_new=None, verbose=False):
 
-        self.set_default_d(d)
-        nonancols = np.isnan(X).sum(axis=0)==0
-        noinfcols = np.isinf(X).sum(axis=0)==0
-        valcols = np.logical_and(nonancols, noinfcols)
-        idx_ala = list(idx_new) + list(idx_old)
+#         self.set_default_d(d)
+#         nonancols = np.isnan(X).sum(axis=0)==0
+#         noinfcols = np.isinf(X).sum(axis=0)==0
+#         valcols = np.logical_and(nonancols, noinfcols)
+#         idx_ala = list(idx_new) + list(idx_old)
 
-        if np.abs(self.gamma)<1e-10:
-            beta_ols = np.ones(X.shape[1])
-            w_hat = np.ones(X.shape[1])
-            X_star_star = X.copy()
-        else:
-            X_valcols = X[:, valcols]
-            if not idx_old:
-                self.beta_ols, self.A_inv, self.XT, self.active_idx = initialize_ols(X_valcols, y, init_idx=idx_new)
-            else:
-                self.beta_ols, self.A_inv, self.XT, self.active_idx = sweep_update_from_D(beta = self.beta_ols, A_inv=self.A_inv,
-                                                                                          XT=self.XT, active_idx=self.active_idx, D=X, y=y, 
-                                                                                          new_idx=idx_new)
+#         if np.abs(self.gamma)<1e-10:
+#             beta_ols = np.ones(X.shape[1])
+#             w_hat = np.ones(X.shape[1])
+#             X_star_star = X.copy()
+#         else:
+#             X_valcols = X[:, valcols]
+#             if not idx_old:
+#                 self.beta_ols, self.A_inv, self.XT, self.active_idx = initialize_ols(X_valcols, y, init_idx=idx_new)
+#             else:
+#                 self.beta_ols, self.A_inv, self.XT, self.active_idx = sweep_update_from_D(beta = self.beta_ols, A_inv=self.A_inv,
+#                                                                                           XT=self.XT, active_idx=self.active_idx, D=X, y=y, 
+#                                                                                           new_idx=idx_new)
 
-            w_hat = 1/np.power(np.abs(self.beta_ols)+self.eps, self.gamma)
-            X_star_star = X_valcols / w_hat
+#             w_hat = 1/np.power(np.abs(self.beta_ols)+self.eps, self.gamma)
+#             X_star_star = X_valcols / w_hat
 
-            # X_star_star = np.zeros_like(X_valcols[:, idx_ala])
-            # for j in range(X_star_star.shape[1]): # vectorise
-            #     X_j = X_valcols[:, j]/w_hat[j]
-            #     X_star_star[:, j] = X_j
+#             # X_star_star = np.zeros_like(X_valcols[:, idx_ala])
+#             # for j in range(X_star_star.shape[1]): # vectorise
+#             #     X_j = X_valcols[:, j]/w_hat[j]
+#             #     X_star_star[:, j] = X_j
 
-        _, _, coefs, _ = lars_path(X_star_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
-        # alphas, active, coefs = lars_path(X_star_star, y.ravel(), method='lasso')
-        try:           
-            beta_hat_star_star = coefs[:, d]
-        except IndexError: # in the event that a solution with d components cant be found, use the next largest. 
-            beta_hat_star_star = coefs[:, -1]
+#         _, _, coefs, _ = lars_path(X_star_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
+#         # alphas, active, coefs = lars_path(X_star_star, y.ravel(), method='lasso')
+#         try:           
+#             beta_hat_star_star = coefs[:, d]
+#         except IndexError: # in the event that a solution with d components cant be found, use the next largest. 
+#             beta_hat_star_star = coefs[:, -1]
 
-        beta_hat_star_n_old_new = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
-#        beta_hat_star_n = np.zeros(X.shape[1])
-#        beta_hat_star_n[idx_ala] = beta_hat_star_n_old_new
+#         beta_hat_star_n_old_new = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+# #        beta_hat_star_n = np.zeros(X.shape[1])
+# #        beta_hat_star_n[idx_ala] = beta_hat_star_n_old_new
 
-#        beta_hat_star_n[valcols] = beta_hat_star_n_valcol
-#        ret = beta_hat_star_n.reshape(1, -1).squeeze()
-        return beta_hat_star_n_old_new.squeeze()
+# #        beta_hat_star_n[valcols] = beta_hat_star_n_valcol
+# #        ret = beta_hat_star_n.reshape(1, -1).squeeze()
+#         return beta_hat_star_n_old_new.squeeze()
     
-    def fit(self, X, y, verbose=False):
-        self.mu = y.mean() if self.fit_intercept else 0            
-        beta = self.__call__(X=X, y=y-self.mu, d=self.default_d, verbose=verbose)
-        self.beta = beta.reshape(-1, 1)
+#     def fit(self, X, y, verbose=False):
+#         self.mu = y.mean() if self.fit_intercept else 0            
+#         beta = self.__call__(X=X, y=y-self.mu, d=self.default_d, verbose=verbose)
+#         self.beta = beta.reshape(-1, 1)
 
-    def predict(self, X):
-        return np.dot(X, self.beta) + self.mu
+#     def predict(self, X):
+#         return np.dot(X, self.beta) + self.mu
     
-    def s_max(self, k, n, p, c1=1, c0=0):
-        if self.gamma==0:
-            return c1*(p/(k**2)) + c0
-        else:
-            return c1*min(np.power(p, 1/2)/k, np.power(p*n, 1/3)/k) + c0
+#     def s_max(self, k, n, p, c1=1, c0=0):
+#         if self.gamma==0:
+#             return c1*(p/(k**2)) + c0
+#         else:
+#             return c1*min(np.power(p, 1/2)/k, np.power(p*n, 1/3)/k) + c0
 
 class AdaptiveLASSO:
-    def __init__(self, gamma=1, fit_intercept=False, default_d=5, rcond=-1, alpha=0, eps=0):
+    def __init__(self, gamma=1, fit_intercept=False, default_d=5, 
+                 rcond=-1, alpha=0, eps=1e-15, w_clp=np.infty):
         self.gamma = gamma
         self.fit_intercept = fit_intercept
         self.default_d = default_d
         self.rcond=rcond
         self.alpha=alpha
         self.eps = eps
+        self.w_clp = w_clp
 
     def __str__(self):
         return ('Ada' if self.gamma != 0 else '') + ('LASSO') + ('(gamma={0})'.format(self.gamma) if self.gamma != 0 else '')
@@ -323,7 +327,10 @@ class AdaptiveLASSO:
         return {'gamma': self.gamma,
                 'fit_intercept': self.fit_intercept,
                 'default_d': self.default_d,
-                'rcond': self.rcond}
+                'rcond': self.rcond,
+                'w_clp': self.w_clp,
+                'alpha': self.alpha,
+                'eps': self.eps}
     
     def set_default_d(self, d):
         self.default_d = d
@@ -336,15 +343,19 @@ class AdaptiveLASSO:
         noinfcols = np.isinf(X).sum(axis=0)==0
         valcols = np.logical_and(nonancols, noinfcols)
         if np.abs(self.gamma)<1e-10:
-            beta_hat = np.ones(X.shape[1])
-            w_hat = np.ones(X.shape[1])
-            X_star_star = X.copy()
+            w_hat = np.ones(np.sum(valcols))
+            X_star_star = X[:, valcols]
         else:
-
             X_valcols = X[:, valcols]
-            beta_hat, _, _, _ = np.linalg.lstsq(X_valcols, y, rcond=self.rcond)
+            if self.alpha and self.alpha>0:
+                ridge = Ridge(alpha=self.alpha, fit_intercept=False)
+                ridge.fit(X_valcols, y.ravel())
+                beta_hat = ridge.coef_.ravel()
+            else:
+                beta_hat, _, _, _ = np.linalg.lstsq(X_valcols, y, rcond=self.rcond)
 
             w_hat = 1/np.power(np.abs(beta_hat)+self.eps, self.gamma)
+            w_hat = np.clip(w_hat, 1/self.w_clp, self.w_clp)
             X_star_star = X_valcols / w_hat
             # X_star_star = np.zeros_like(X_valcols)
             # for j in range(X_star_star.shape[1]): # vectorise
@@ -353,29 +364,233 @@ class AdaptiveLASSO:
 
         _, _, coefs, _ = lars_path(X_star_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
         # alphas, active, coefs = lars_path(X_star_star, y.ravel(), method='lasso')
-        try:           
-            beta_hat_star_star = coefs[:, d]
-        except IndexError:
-            beta_hat_star_star = coefs[:, -1]
+        j = min(d, coefs.shape[1] - 1)
+        beta_hat_star_star = coefs[:, j]
 
-        beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+
+        # beta_hat_star_n_valcol = np.array([beta_hat_star_star[j]/w_hat[j] for j in range(len(beta_hat_star_star))])
+        beta_hat_star_n_valcol = beta_hat_star_star/w_hat
         beta_hat_star_n = np.zeros(X.shape[1])
         beta_hat_star_n[valcols] = beta_hat_star_n_valcol
         return beta_hat_star_n.reshape(1, -1).squeeze()
     
     def fit(self, X, y, verbose=False):
-        self.mu = y.mean() if self.fit_intercept else 0            
+        self.mu = float(y.mean()) if self.fit_intercept else 0            
         beta = self.__call__(X=X, y=y-self.mu, d=self.default_d, verbose=verbose)
         self.beta = beta.reshape(-1, 1)
 
     def predict(self, X):
-        return np.dot(X, self.beta) + self.mu
+        return np.dot(X, self.beta).ravel() + self.mu
     
     def s_max(self, k, n, p, c1=1, c0=0):
         if self.gamma==0:
             return c1*(p/(k**2)) + c0
         else:
             return c1*min(np.power(p, 1/2)/k, np.power(p*n, 1/3)/k) + c0
+
+def initialize_ols(D, y, init_idx, ridge_alpha=0.0, rcond=-1):
+    """
+    Initialize OLS (or ridge) on D[:, init_idx] and return cached quantities
+    for future block updates.
+
+    If ridge_alpha>0, uses ridge solution with Gram = X^T X + alpha I.
+    """
+    X = D[:, init_idx]  # (n, p0)
+
+    if ridge_alpha and ridge_alpha > 0:
+        # Ridge estimate for weights (stable under collinearity)
+        ridge = Ridge(alpha=ridge_alpha, fit_intercept=False)
+        ridge.fit(X, y.ravel())
+        beta = ridge.coef_.ravel()
+
+        A = X.T @ X + ridge_alpha * np.eye(X.shape[1])
+        try:
+            A_inv = np.linalg.inv(A)
+        except np.linalg.LinAlgError:
+            A_inv = np.linalg.pinv(A)
+    else:
+        A = X.T @ X
+        try:
+            A_inv = np.linalg.inv(A)
+        except np.linalg.LinAlgError:
+            A_inv = np.linalg.pinv(A)
+
+        beta = (A_inv @ (X.T @ y)).ravel()
+
+    XT = X.T  # (p0, n)
+    return beta, A_inv, XT, list(init_idx)
+
+def sweep_update_from_D(beta, A_inv, XT, active_idx, D, y, new_idx, ridge_alpha=0.0):
+    """
+    Block update for adding columns Z = D[:, new_idx] to an existing
+    active design represented by (beta, A_inv, XT).
+
+    If ridge_alpha>0, maintains inverse of (X^T X + alpha I) consistently.
+    """
+    beta = beta.reshape(-1, 1)           # (p, 1)
+    Z = D[:, new_idx]                   # (n, q)
+    q = Z.shape[1]
+
+    # Cross products
+    B = XT @ Z                          # (p, q)
+    C = Z.T @ Z                         # (q, q)
+    if ridge_alpha and ridge_alpha > 0:
+        C = C + ridge_alpha * np.eye(q)  # ridge-consistent augmentation
+
+    yZ = Z.T @ y                        # (q, 1)
+
+    # Schur complement
+    S = C - B.T @ (A_inv @ B)           # (q, q)
+
+    rhs = yZ - B.T @ beta               # (q, 1)
+    try:
+        beta_Z = np.linalg.solve(S, rhs)
+        S_inv = np.linalg.inv(S)
+    except np.linalg.LinAlgError:
+        S_pinv = np.linalg.pinv(S)
+        beta_Z = S_pinv @ rhs
+        S_inv = S_pinv
+
+    # Update old coefficients
+    beta_X_new = beta - A_inv @ (B @ beta_Z)      # (p, 1)
+    beta_new = np.vstack([beta_X_new, beta_Z]).ravel()
+
+    # Update inverse Gram (block inverse)
+    top_left = A_inv + A_inv @ B @ S_inv @ B.T @ A_inv
+    top_right = -A_inv @ B @ S_inv
+    bottom_left = -S_inv @ B.T @ A_inv
+    bottom_right = S_inv
+
+    A_tilde_inv = np.block([[top_left, top_right],
+                            [bottom_left, bottom_right]])
+
+    # Update XT and active indices
+    XT_new = np.vstack([XT, Z.T])
+    active_idx_new = active_idx + list(new_idx)
+
+    return beta_new, A_tilde_inv, XT_new, active_idx_new
+
+class EfficientAdaptiveLASSO:
+    """
+    Adaptive LASSO base learner with efficient OLS/ridge weight updates
+    on an *active set* of columns (ICL-style). Returns a full (p,) vector
+    like the basic AdaptiveLASSO.
+    """
+    def __init__(self, gamma=1, fit_intercept=False, default_d=5,
+                 rcond=-1, alpha=0.0, eps=1e-12, w_clp=np.inf):
+        self.gamma = gamma
+        self.fit_intercept = fit_intercept
+        self.default_d = default_d
+        self.rcond = rcond
+        self.alpha = alpha      # ridge alpha for weight-estimator; 0 -> OLS
+        self.eps = eps
+        self.w_clp = w_clp
+
+        # Cached state for sweep updates
+        self.beta_ols = None
+        self.A_inv = None
+        self.XT = None
+        self.active_idx = []
+
+    def __str__(self):
+        return ('EffAda' if self.gamma != 0 else '') + 'LASSO' + (f'(gamma={self.gamma})' if self.gamma != 0 else '')
+
+    def __repr__(self):
+        return self.__str__()
+
+    def get_params(self, deep=False):
+        return {
+            'gamma': self.gamma,
+            'fit_intercept': self.fit_intercept,
+            'default_d': self.default_d,
+            'rcond': self.rcond,
+            'alpha': self.alpha,
+            'eps': self.eps,
+            'w_clp': self.w_clp
+        }
+
+    def set_default_d(self, d):
+        self.default_d = d
+
+    def __call__(self, X, y, d, idx_old=None, idx_new=None, verbose=False):
+        """
+        Parameters
+        ----------
+        X : (n, p) ndarray
+        y : (n,) or (n,1) ndarray
+        d : int
+            max number of LARS steps (sparsity cap)
+        idx_old : list[int] | None
+            previously active indices (optional; mainly for sanity)
+        idx_new : list[int]
+            new indices to add this iteration
+
+        Returns
+        -------
+        beta_full : (p,) ndarray
+            Full coefficient vector (zeros off active set), consistent with basic AdaptiveLASSO.
+        """
+        if idx_new is None or len(idx_new) == 0:
+            raise ValueError("idx_new must be a non-empty list/array of new feature indices.")
+
+        self.set_default_d(d)
+        y = y.reshape(-1, 1)
+
+        # (Optional) keep NaN/Inf protection consistent with your other base learners
+        nonancols = np.isnan(X).sum(axis=0) == 0
+        noinfcols = np.isinf(X).sum(axis=0) == 0
+        valcols = nonancols & noinfcols
+
+        # Ensure requested indices are valid columns
+        idx_new = [j for j in idx_new if valcols[j]]
+        if idx_old is not None:
+            idx_old = [j for j in idx_old if valcols[j]]
+
+        # Initialize or sweep-update cached OLS/ridge on ACTIVE SET
+        if self.beta_ols is None or len(self.active_idx) == 0:
+            self.beta_ols, self.A_inv, self.XT, self.active_idx = initialize_ols(
+                D=X, y=y, init_idx=idx_new, ridge_alpha=self.alpha, rcond=self.rcond
+            )
+        else:
+            # (Optional sanity) if idx_old provided, you can check it matches cached active_idx
+            # but don't enforce to avoid extra overhead / brittleness.
+            self.beta_ols, self.A_inv, self.XT, self.active_idx = sweep_update_from_D(
+                beta=self.beta_ols, A_inv=self.A_inv, XT=self.XT,
+                active_idx=self.active_idx, D=X, y=y,
+                new_idx=idx_new, ridge_alpha=self.alpha
+            )
+
+        # Build weights on ACTIVE SET only
+        p_active = len(self.active_idx)
+        if abs(self.gamma) < 1e-10:
+            w_hat = np.ones(p_active, dtype=float)
+        else:
+            w_hat = 1.0 / np.power(np.abs(self.beta_ols) + self.eps, self.gamma)
+            if np.isfinite(self.w_clp):
+                w_hat = np.clip(w_hat, 1.0 / self.w_clp, self.w_clp)
+
+        # LARS on ACTIVE SET only (clean compute cost)
+        X_active = X[:, self.active_idx]                 # (n, p_active)
+        X_star = X_active / w_hat                        # column scaling
+        _, _, coefs, _ = lars_path(X_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
+
+        j = min(d, coefs.shape[1] - 1)
+        beta_star = coefs[:, j]                          # (p_active,)
+        beta_active = beta_star / w_hat                  # back-transform
+
+        # Expand to full vector, consistent with basic AdaptiveLASSO
+        beta_full = np.zeros(X.shape[1], dtype=float)
+        beta_full[self.active_idx] = beta_active
+        return beta_full
+
+    def fit(self, X, y, idx_new, idx_old=None, verbose=False):
+        self.mu = float(y.mean()) if self.fit_intercept else 0.0
+        beta_full = self.__call__(X=X, y=y - self.mu, d=self.default_d, idx_old=idx_old, idx_new=idx_new, verbose=verbose)
+        self.beta = beta_full.reshape(-1, 1)
+        return self
+
+    def predict(self, X):
+        return (X @ self.beta).ravel() + self.mu
 
 class LARS:
     def __init__(self, default_d=None):
@@ -398,34 +613,143 @@ class LARS:
         self.lars.fit(X, y)
         return self.lars.coef_
 
+import numpy as np
+
 class ThresholdedLeastSquares:
-    def __init__(self, default_d=None):
-        self.default_d=default_d
+    """
+    TLS: rank features by an initial linear fit, keep top-d by |coef|,
+    then refit OLS on selected features.
+
+    init:
+      - "ols": initial ranking via OLS
+      - "fastridge_em": initial ranking via fastridge.RidgeEM (Bayesian EM ridge)
+    """
+    def __init__(
+        self,
+        default_d=None,
+        init="ols",
+        fit_intercept=False,
+        rcond=None,
+        # fastridge (only used if init="fastridge_em")
+        fastridge_eps=1e-8,
+        fastridge_normalize=False,
+        fastridge_closed_form_m_step=True,
+        fastridge_t2=True,
+        w_clp=np.inf,
+    ):
+        self.default_d = default_d
+        self.init = init
+        self.fit_intercept = fit_intercept
+        self.rcond = rcond
+
+        self.fastridge_eps = fastridge_eps
+        self.fastridge_normalize = fastridge_normalize
+        self.fastridge_closed_form_m_step = fastridge_closed_form_m_step
+        self.fastridge_t2 = fastridge_t2
+
+        self.w_clp = w_clp  # optional clipping of initial coefs for ranking stability
 
     def __repr__(self):
-        return 'TLS'
+        return "TLS"
 
     def __str__(self):
-        return 'TLS'
+        return "TLS"
 
     def set_default_d(self, d):
-        self.set_default_d=d
-    
+        self.default_d = d
+
     def get_params(self, deep=False):
         return {
-            'default_d': self.default_d
+            "default_d": self.default_d,
+            "init": self.init,
+            "fit_intercept": self.fit_intercept,
+            "rcond": self.rcond,
+            "fastridge_eps": self.fastridge_eps,
+            "fastridge_normalize": self.fastridge_normalize,
+            "fastridge_closed_form_m_step": self.fastridge_closed_form_m_step,
+            "fastridge_t2": self.fastridge_t2,
+            "w_clp": self.w_clp,
         }
 
-    def __call__(self, X, y, d, verbose=False):
-        if verbose: print('Full OLS')
-        beta_ols, _, _, _ = np.linalg.lstsq(X, y)
-        idx = np.argsort(beta_ols)[-d:]
-        if verbose: print('Thresholded OLS')
-        beta_tls, _, _, _ = np.linalg.lstsq(X[:, idx], y)
-        beta = np.zeros_like(beta_ols)
-        beta[idx] = beta_tls
-        if verbose: print(idx, beta_tls)
-        return beta
+    def __call__(self, X, y, d=None, verbose=False):
+        if d is None:
+            if self.default_d is None:
+                raise ValueError("Provide d or set default_d.")
+            d = self.default_d
+
+        # Filter invalid columns (consistent with your other base learners)
+        nonancols = np.isnan(X).sum(axis=0) == 0
+        noinfcols = np.isinf(X).sum(axis=0) == 0
+        valcols = nonancols & noinfcols
+
+        Xv = X[:, valcols]
+        yv = y.ravel()
+
+        # Intercept handling (center y for both init-fit + refit)
+        mu = float(yv.mean()) if self.fit_intercept else 0.0
+        y0 = yv - mu
+
+        if verbose:
+            print(f"Initial fit: {self.init}")
+
+        # --- Step 1: initial coefficients for ranking
+        if self.init == "ols":
+            beta0, *_ = np.linalg.lstsq(Xv, y0, rcond=self.rcond)
+            beta0 = beta0.ravel()
+
+        elif self.init == "fastridge_em":
+            try:
+                from fastridge import RidgeEM
+            except Exception as e:
+                raise ImportError(
+                    "init='fastridge_em' requires `pip install fastridge`."
+                ) from e
+
+            # We set fit_intercept=False because we already centered y (and typically
+            # you want intercept handled consistently across stages).
+            ridge = RidgeEM(
+                epsilon=self.fastridge_eps,
+                fit_intercept=False,
+                normalize=self.fastridge_normalize,
+                closed_form_m_step=self.fastridge_closed_form_m_step,
+                trace=False,
+                verbose=False,
+                t2=self.fastridge_t2,
+            )
+            ridge.fit(Xv, y0)
+            beta0 = np.asarray(ridge.coef_).ravel()
+
+        else:
+            raise ValueError("init must be one of {'ols','fastridge_em'}")
+
+        # Optional stability clip on ranking weights (rarely needed, but matches your style)
+        if np.isfinite(self.w_clp):
+            beta0 = np.clip(beta0, -self.w_clp, self.w_clp)
+
+        # --- rank by magnitude
+        d_eff = min(int(d), Xv.shape[1])
+        idx_local = np.argsort(np.abs(beta0))[-d_eff:]
+        idx_global = np.where(valcols)[0][idx_local]
+
+        if verbose:
+            print("Selected idx (global):", idx_global)
+
+        # --- Step 2: thresholded refit (OLS on selected columns)
+        if verbose:
+            print("Thresholded refit: OLS")
+
+        beta_tls, *_ = np.linalg.lstsq(X[:, idx_global], y0, rcond=self.rcond)
+        beta_tls = beta_tls.ravel()
+
+        beta_full = np.zeros(X.shape[1], dtype=float)
+        beta_full[idx_global] = beta_tls
+
+        # store for inspection
+        self.support_ = idx_global
+        self.coef_ = beta_full
+        self.intercept_ = mu
+
+        return beta_full
 
 class SIS:
     def __init__(self, n_sis):
