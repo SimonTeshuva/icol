@@ -249,8 +249,6 @@ class BSS_LOGISTIC:
         p1 = proba[:, 1]
         return (p1 >= threshold).astype(int)
 
-
-
 class LOGISTIC_ADALASSO:
     def __init__(self, log_c_lo=-4, log_c_hi=3, c_num=100,  solver="saga",
                  class_weight=None, max_iter=5000, tol=1e-4, eps_nnz=1e-12, 
@@ -309,10 +307,7 @@ class LOGISTIC_ADALASSO:
                 beta_hat = beta_hat.reshape(-1, 1)
             
             w_hat = 1/np.power(np.abs(beta_hat), self.gamma).ravel()
-            X_star_star = np.zeros_like(X_valcols)
-            for j in range(X_star_star.shape[1]): # vectorise
-                X_j = X_valcols[:, j]/w_hat[j]
-                X_star_star[:, j] = X_j
+            X_star_star = X_valcols / w_hat
 
         # best_idx = 0
         # for i, model in enumerate(self.models):

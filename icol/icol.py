@@ -267,10 +267,12 @@ class EfficientAdaptiveLASSO:
                                                                                           new_idx=idx_new)
 
             w_hat = 1/np.power(np.abs(self.beta_ols), self.gamma)
-            X_star_star = np.zeros_like(X_valcols[:, idx_ala])
-            for j in range(X_star_star.shape[1]): # vectorise
-                X_j = X_valcols[:, j]/w_hat[j]
-                X_star_star[:, j] = X_j
+            X_star_star = X_valcols / w_hat
+
+            # X_star_star = np.zeros_like(X_valcols[:, idx_ala])
+            # for j in range(X_star_star.shape[1]): # vectorise
+            #     X_j = X_valcols[:, j]/w_hat[j]
+            #     X_star_star[:, j] = X_j
 
         _, _, coefs, _ = lars_path(X_star_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
         # alphas, active, coefs = lars_path(X_star_star, y.ravel(), method='lasso')
@@ -341,10 +343,11 @@ class AdaptiveLASSO:
             beta_hat, _, _, _ = np.linalg.lstsq(X_valcols, y, rcond=self.rcond)
 
             w_hat = 1/np.power(np.abs(beta_hat), self.gamma)
-            X_star_star = np.zeros_like(X_valcols)
-            for j in range(X_star_star.shape[1]): # vectorise
-                X_j = X_valcols[:, j]/w_hat[j]
-                X_star_star[:, j] = X_j
+            X_star_star = X_valcols / w_hat
+            # X_star_star = np.zeros_like(X_valcols)
+            # for j in range(X_star_star.shape[1]): # vectorise
+            #     X_j = X_valcols[:, j]/w_hat[j]
+            #     X_star_star[:, j] = X_j
 
         _, _, coefs, _ = lars_path(X_star_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
         # alphas, active, coefs = lars_path(X_star_star, y.ravel(), method='lasso')
