@@ -472,23 +472,11 @@ def sweep_update_from_D(beta, A_inv, XT, active_idx, D, y, new_idx, ridge_alpha=
 
 class EfficientAdaptiveLASSO:
     """
-    Adaptive LASSO base learner with efficient OLS/ridge weight updates
-    on the ICL pool.
+    Adaptive LASSO base learner with efficient OLS/ridge weight updates.
 
-    Important:
-    ----------
-    This class is designed to be compatible with the existing ICL interface.
-
-    Unlike the first version, __call__ does NOT return a full p-dimensional
-    coefficient vector. It returns coefficients in the current pool coordinate
-    system, exactly like the other base estimators.
-
-    Therefore, inside ICL this remains valid:
-
-        beta = np.zeros(shape=(X.shape[1]))
-        beta[pool_lst] = beta_i
-
-    where beta_i has shape (len(pool_lst),).
+    The class is designed to be compatible with the existing ICL implementation:
+    __call__ returns coefficients in the current ICL pool coordinate system,
+    not in the full p-dimensional feature space.
     """
 
     def __init__(
@@ -498,8 +486,10 @@ class EfficientAdaptiveLASSO:
         default_d=5,
         rcond=-1,
         alpha=0.0,
-        eps=1e-12,
-        w_clp=np.inf
+        eps=1e-15,
+        w_clp=np.inf,
+        fallback_to_lstsq=True,
+        rank_tol=None,
     ):
         self.gamma = gamma
         self.fit_intercept = fit_intercept
@@ -508,6 +498,8 @@ class EfficientAdaptiveLASSO:
         self.alpha = alpha
         self.eps = eps
         self.w_clp = w_clp
+        self.fallback_to_lstsq = fallback_to_lstsq
+        self.rank_tol = rank_tol
 
         self.reset_cache()
 
@@ -536,7 +528,9 @@ class EfficientAdaptiveLASSO:
             'rcond': self.rcond,
             'alpha': self.alpha,
             'eps': self.eps,
-            'w_clp': self.w_clp
+            'w_clp': self.w_clp,
+            'fallback_to_lstsq': self.fallback_to_lstsq,
+            'rank_tol': self.rank_tol,
         }
 
     def set_default_d(self, d):
@@ -548,19 +542,6 @@ class EfficientAdaptiveLASSO:
         return nonancols & noinfcols
 
     def _make_pool_order(self, idx_old, idx_new, valcols):
-        """
-        Reconstruct the same kind of pool list that ICL uses:
-
-            pool_old = deepcopy(pool_)
-            pool_.update(sis_i)
-            pool_lst = list(pool_)
-
-        Since ICL passes idx_old=list(pool_old) and idx_new=sis_i, we rebuild
-        the current pool here.
-
-        This is needed because this estimator receives the full X, not
-        X[:, pool_lst].
-        """
         if idx_old is None:
             idx_old = []
 
@@ -569,64 +550,73 @@ class EfficientAdaptiveLASSO:
 
         pool_set = set(idx_old)
         pool_set.update(idx_new)
+
+        # This mirrors the existing ICL implementation:
+        #     pool_.update(sis_i)
+        #     pool_lst = list(pool_)
+        #
+        # Since ICL itself uses a set, the efficient estimator also has to
+        # reconstruct this set-based ordering.
         pool_lst = list(pool_set)
 
         return pool_lst, idx_new
 
-    def __call__(self, X, y, d, idx_old=None, idx_new=None, verbose=False):
+    def _should_use_lstsq(self, X_pool):
         """
-        Parameters
-        ----------
-        X : ndarray, shape (n, p)
-            Full design matrix, not restricted to the current pool.
+        Decide whether to use the ordinary np.linalg.lstsq path for the
+        preliminary adaptive-weight estimator.
 
-        y : ndarray, shape (n,) or (n, 1)
-
-        d : int
-            Maximum number of LARS steps.
-
-        idx_old : list[int] | None
-            Previous ICL pool.
-
-        idx_new : list[int]
-            Newly selected features from SIS.
-
-        Returns
-        -------
-        beta_pool : ndarray, shape (len(pool_lst),)
-            Coefficients ordered according to the reconstructed ICL pool.
-            This makes the estimator compatible with:
-
-                beta[pool_lst] = beta_i
+        This is mainly needed for alpha=0 in underdetermined or rank-deficient
+        settings, where np.linalg.lstsq gives the minimum-norm solution.
         """
-        if idx_new is None or len(idx_new) == 0:
-            raise ValueError("idx_new must be a non-empty list/array of new feature indices.")
+        if not self.fallback_to_lstsq:
+            return False
 
-        self.set_default_d(d)
+        if self.alpha and self.alpha > 0:
+            return False
 
-        y = np.asarray(y).reshape(-1, 1)
-        valcols = self._valid_cols(X)
+        n, p = X_pool.shape
 
-        pool_lst, idx_new_valid = self._make_pool_order(
-            idx_old=idx_old,
-            idx_new=idx_new,
-            valcols=valcols
-        )
+        # Underdetermined or exactly square cases are the dangerous ones.
+        # Square can still be fine, but it is often numerically brittle in
+        # symbolic-expanded dictionaries.
+        if p >= n:
+            return True
 
-        if len(idx_new_valid) == 0:
-            return np.zeros(len(pool_lst), dtype=float)
+        # Optional rank check. This is more expensive, but much cheaper than
+        # debugging silent path differences.
+        rank = np.linalg.matrix_rank(X_pool, tol=self.rank_tol)
+        if rank < p:
+            return True
 
-        # Initialize or update the cached OLS/ridge solution on the active set.
+        return False
+
+    def _compute_beta_reference(self, X_pool, y):
+        """
+        Compute the preliminary OLS/ridge estimate exactly like AdaptiveLASSO.
+        """
+        if self.alpha and self.alpha > 0:
+            ridge = Ridge(alpha=self.alpha, fit_intercept=False)
+            ridge.fit(X_pool, y.ravel())
+            return ridge.coef_.ravel()
+
+        beta_hat, _, _, _ = np.linalg.lstsq(X_pool, y, rcond=self.rcond)
+        return beta_hat.ravel()
+
+    def _compute_beta_sweep(self, X, y, idx_new_valid):
+        """
+        Update or initialize the cached OLS/ridge solution using the SWEEP/block
+        inverse update.
+        """
         if self.beta_ols is None or len(self.active_idx) == 0:
             self.beta_ols, self.A_inv, self.XT, self.active_idx = initialize_ols(
                 D=X,
                 y=y,
                 init_idx=idx_new_valid,
                 ridge_alpha=self.alpha,
-                rcond=self.rcond
+                rcond=self.rcond,
             )
         else:
-            # Only add genuinely new features relative to the cached active set.
             cached = set(self.active_idx)
             new_to_cache = [j for j in idx_new_valid if j not in cached]
 
@@ -639,52 +629,90 @@ class EfficientAdaptiveLASSO:
                     D=X,
                     y=y,
                     new_idx=new_to_cache,
-                    ridge_alpha=self.alpha
+                    ridge_alpha=self.alpha,
                 )
 
-        p_active = len(self.active_idx)
+        return np.asarray(self.beta_ols).reshape(-1)
 
-        if p_active == 0:
-            return np.zeros(len(pool_lst), dtype=float)
+    def __call__(self, X, y, d, idx_old=None, idx_new=None, verbose=False):
+        if idx_new is None or len(idx_new) == 0:
+            raise ValueError("idx_new must be a non-empty list/array of new feature indices.")
 
-        # Adaptive weights on the cached active set.
-        beta_ols = np.asarray(self.beta_ols).reshape(-1)
+        # A new ICL run begins with an empty previous pool.
+        # This prevents cache leakage across datasets, repetitions, validation
+        # refits, or fresh calls using the same estimator object.
+        if idx_old is None or len(idx_old) == 0:
+            self.reset_cache()
+
+        self.set_default_d(d)
+
+        y = np.asarray(y).reshape(-1, 1)
+        valcols = self._valid_cols(X)
+
+        pool_lst, idx_new_valid = self._make_pool_order(
+            idx_old=idx_old,
+            idx_new=idx_new,
+            valcols=valcols,
+        )
+
+        if len(pool_lst) == 0:
+            return np.zeros(0, dtype=float)
+
+        X_pool = X[:, pool_lst]
 
         if abs(self.gamma) < 1e-10:
-            w_hat = np.ones(p_active, dtype=float)
+            w_hat_pool = np.ones(len(pool_lst), dtype=float)
+
         else:
-            w_hat = 1.0 / np.power(np.abs(beta_ols) + self.eps, self.gamma)
+            use_lstsq = self._should_use_lstsq(X_pool)
+
+            if use_lstsq:
+                # Reference path: same preliminary estimator as AdaptiveLASSO.
+                beta_pool_ols = self._compute_beta_reference(X_pool, y)
+
+                # Reset the SWEEP cache because the cache may not correspond to
+                # the minimum-norm solution in this regime.
+                self.reset_cache()
+
+            else:
+                # Efficient path: update the cached estimate.
+                beta_active = self._compute_beta_sweep(
+                    X=X,
+                    y=y,
+                    idx_new_valid=idx_new_valid,
+                )
+
+                active_to_coef = {
+                    int(idx): float(coef)
+                    for idx, coef in zip(self.active_idx, beta_active)
+                }
+
+                beta_pool_ols = np.array(
+                    [active_to_coef.get(int(idx), 0.0) for idx in pool_lst],
+                    dtype=float,
+                )
+
+            w_hat_pool = 1.0 / np.power(np.abs(beta_pool_ols) + self.eps, self.gamma)
 
             if np.isfinite(self.w_clp):
-                w_hat = np.clip(w_hat, 1.0 / self.w_clp, self.w_clp)
+                w_hat_pool = np.clip(w_hat_pool, 1.0 / self.w_clp, self.w_clp)
 
-        # LARS on the active set only.
-        X_active = X[:, self.active_idx]
-        X_star = X_active / w_hat
+        # LARS is now run on the same pool-coordinate design that the ordinary
+        # AdaptiveLASSO would receive from ICL.
+        X_star = X_pool / w_hat_pool
 
         _, _, coefs, _ = lars_path(
             X_star,
             y.ravel(),
             return_n_iter=True,
             max_iter=d,
-            method='lasso'
+            method='lasso',
         )
 
         j = min(d, coefs.shape[1] - 1)
 
         beta_star = coefs[:, j]
-        beta_active = beta_star / w_hat
-
-        # Map active-set coefficients back into pool coordinates.
-        active_to_coef = {
-            int(idx): float(coef)
-            for idx, coef in zip(self.active_idx, beta_active)
-        }
-
-        beta_pool = np.array(
-            [active_to_coef.get(int(idx), 0.0) for idx in pool_lst],
-            dtype=float
-        )
+        beta_pool = beta_star / w_hat_pool
 
         return beta_pool
 
@@ -699,14 +727,14 @@ class EfficientAdaptiveLASSO:
             d=self.default_d,
             idx_old=idx_old,
             idx_new=idx_new,
-            verbose=verbose
+            verbose=verbose,
         )
 
         valcols = self._valid_cols(X)
         pool_lst, _ = self._make_pool_order(
             idx_old=idx_old,
             idx_new=idx_new,
-            valcols=valcols
+            valcols=valcols,
         )
 
         beta_full = np.zeros(X.shape[1], dtype=float)
@@ -717,7 +745,7 @@ class EfficientAdaptiveLASSO:
 
     def predict(self, X):
         return (X @ self.beta).ravel() + self.mu
-
+    
 class LARS:
     def __init__(self, default_d=None):
         self.default_d=default_d
