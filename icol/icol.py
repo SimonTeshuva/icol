@@ -1048,14 +1048,26 @@ class ICL:
             pool_.update(sis_i)
             pool_lst = list(pool_)
             if track_pool: self.pool = pool_lst
-            if str(self.so) == 'EffAdaLASSO(gamma=1)':
-                beta_i = self.so(X=X, y=y, d=i+1, idx_old = list(pool_old), idx_new=sis_i, verbose=verbose)
+            if isinstance(self.so, EfficientAdaptiveLASSO):
+                beta_i = self.so(
+                    X=X,
+                    y=y,
+                    d=i + 1,
+                    idx_old=list(pool_old),
+                    idx_new=sis_i,
+                    pool_lst=pool_lst,
+                    verbose=verbose
+                )
             else:
-                beta_i = self.so(X=X[:, pool_lst], y=y, d=i+1, verbose=verbose)
+                beta_i = self.so(
+                    X=X[:, pool_lst],
+                    y=y,
+                    d=i + 1,
+                    verbose=verbose
+                )
 
             beta = np.zeros(shape=(X.shape[1]))
             beta[pool_lst] = beta_i
-
             if self.optimize_k or self.track_intermediates:
                 idx = np.nonzero(beta)[0]
                 if self.normalize:

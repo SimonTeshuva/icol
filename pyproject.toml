@@ -1,6 +1,6 @@
 [project]
 name = "icol"
-version = "0.14.2"
+version = "0.14.3"
 description = "Iterative Correlation Learning implementation"
 authors = [
   { name = "Simon Teshuva", email = "simon.teshuva@gmail.com" }
