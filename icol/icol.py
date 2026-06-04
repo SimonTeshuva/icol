@@ -1135,7 +1135,7 @@ class ICL:
                     d=i + 1,
                     verbose=verbose
                 )
-
+            beta_i = np.asarray(beta_i).ravel()
             beta = np.zeros(shape=(X.shape[1]))
             beta[pool_lst] = beta_i
             if self.optimize_k or self.track_intermediates:
