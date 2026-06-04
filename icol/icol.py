@@ -473,27 +473,57 @@ def sweep_update_from_D(beta, A_inv, XT, active_idx, D, y, new_idx, ridge_alpha=
 class EfficientAdaptiveLASSO:
     """
     Adaptive LASSO base learner with efficient OLS/ridge weight updates
-    on an *active set* of columns (ICL-style). Returns a full (p,) vector
-    like the basic AdaptiveLASSO.
+    on the ICL pool.
+
+    Important:
+    ----------
+    This class is designed to be compatible with the existing ICL interface.
+
+    Unlike the first version, __call__ does NOT return a full p-dimensional
+    coefficient vector. It returns coefficients in the current pool coordinate
+    system, exactly like the other base estimators.
+
+    Therefore, inside ICL this remains valid:
+
+        beta = np.zeros(shape=(X.shape[1]))
+        beta[pool_lst] = beta_i
+
+    where beta_i has shape (len(pool_lst),).
     """
-    def __init__(self, gamma=1, fit_intercept=False, default_d=5,
-                 rcond=-1, alpha=0.0, eps=1e-12, w_clp=np.inf):
+
+    def __init__(
+        self,
+        gamma=1,
+        fit_intercept=False,
+        default_d=5,
+        rcond=-1,
+        alpha=0.0,
+        eps=1e-12,
+        w_clp=np.inf
+    ):
         self.gamma = gamma
         self.fit_intercept = fit_intercept
         self.default_d = default_d
         self.rcond = rcond
-        self.alpha = alpha      # ridge alpha for weight-estimator; 0 -> OLS
+        self.alpha = alpha
         self.eps = eps
         self.w_clp = w_clp
 
-        # Cached state for sweep updates
+        self.reset_cache()
+
+    def reset_cache(self):
         self.beta_ols = None
         self.A_inv = None
         self.XT = None
         self.active_idx = []
+        return self
 
     def __str__(self):
-        return ('EffAda' if self.gamma != 0 else '') + 'LASSO' + (f'(gamma={self.gamma})' if self.gamma != 0 else '')
+        return (
+            ('EffAda' if self.gamma != 0 else '')
+            + 'LASSO'
+            + (f'(gamma={self.gamma})' if self.gamma != 0 else '')
+        )
 
     def __repr__(self):
         return self.__str__()
@@ -512,80 +542,176 @@ class EfficientAdaptiveLASSO:
     def set_default_d(self, d):
         self.default_d = d
 
+    def _valid_cols(self, X):
+        nonancols = np.isnan(X).sum(axis=0) == 0
+        noinfcols = np.isinf(X).sum(axis=0) == 0
+        return nonancols & noinfcols
+
+    def _make_pool_order(self, idx_old, idx_new, valcols):
+        """
+        Reconstruct the same kind of pool list that ICL uses:
+
+            pool_old = deepcopy(pool_)
+            pool_.update(sis_i)
+            pool_lst = list(pool_)
+
+        Since ICL passes idx_old=list(pool_old) and idx_new=sis_i, we rebuild
+        the current pool here.
+
+        This is needed because this estimator receives the full X, not
+        X[:, pool_lst].
+        """
+        if idx_old is None:
+            idx_old = []
+
+        idx_old = [int(j) for j in idx_old if valcols[int(j)]]
+        idx_new = [int(j) for j in idx_new if valcols[int(j)]]
+
+        pool_set = set(idx_old)
+        pool_set.update(idx_new)
+        pool_lst = list(pool_set)
+
+        return pool_lst, idx_new
+
     def __call__(self, X, y, d, idx_old=None, idx_new=None, verbose=False):
         """
         Parameters
         ----------
-        X : (n, p) ndarray
-        y : (n,) or (n,1) ndarray
+        X : ndarray, shape (n, p)
+            Full design matrix, not restricted to the current pool.
+
+        y : ndarray, shape (n,) or (n, 1)
+
         d : int
-            max number of LARS steps (sparsity cap)
+            Maximum number of LARS steps.
+
         idx_old : list[int] | None
-            previously active indices (optional; mainly for sanity)
+            Previous ICL pool.
+
         idx_new : list[int]
-            new indices to add this iteration
+            Newly selected features from SIS.
 
         Returns
         -------
-        beta_full : (p,) ndarray
-            Full coefficient vector (zeros off active set), consistent with basic AdaptiveLASSO.
+        beta_pool : ndarray, shape (len(pool_lst),)
+            Coefficients ordered according to the reconstructed ICL pool.
+            This makes the estimator compatible with:
+
+                beta[pool_lst] = beta_i
         """
         if idx_new is None or len(idx_new) == 0:
             raise ValueError("idx_new must be a non-empty list/array of new feature indices.")
 
         self.set_default_d(d)
-        y = y.reshape(-1, 1)
 
-        # (Optional) keep NaN/Inf protection consistent with your other base learners
-        nonancols = np.isnan(X).sum(axis=0) == 0
-        noinfcols = np.isinf(X).sum(axis=0) == 0
-        valcols = nonancols & noinfcols
+        y = np.asarray(y).reshape(-1, 1)
+        valcols = self._valid_cols(X)
 
-        # Ensure requested indices are valid columns
-        idx_new = [j for j in idx_new if valcols[j]]
-        if idx_old is not None:
-            idx_old = [j for j in idx_old if valcols[j]]
+        pool_lst, idx_new_valid = self._make_pool_order(
+            idx_old=idx_old,
+            idx_new=idx_new,
+            valcols=valcols
+        )
 
-        # Initialize or sweep-update cached OLS/ridge on ACTIVE SET
+        if len(idx_new_valid) == 0:
+            return np.zeros(len(pool_lst), dtype=float)
+
+        # Initialize or update the cached OLS/ridge solution on the active set.
         if self.beta_ols is None or len(self.active_idx) == 0:
             self.beta_ols, self.A_inv, self.XT, self.active_idx = initialize_ols(
-                D=X, y=y, init_idx=idx_new, ridge_alpha=self.alpha, rcond=self.rcond
+                D=X,
+                y=y,
+                init_idx=idx_new_valid,
+                ridge_alpha=self.alpha,
+                rcond=self.rcond
             )
         else:
-            # (Optional sanity) if idx_old provided, you can check it matches cached active_idx
-            # but don't enforce to avoid extra overhead / brittleness.
-            self.beta_ols, self.A_inv, self.XT, self.active_idx = sweep_update_from_D(
-                beta=self.beta_ols, A_inv=self.A_inv, XT=self.XT,
-                active_idx=self.active_idx, D=X, y=y,
-                new_idx=idx_new, ridge_alpha=self.alpha
-            )
+            # Only add genuinely new features relative to the cached active set.
+            cached = set(self.active_idx)
+            new_to_cache = [j for j in idx_new_valid if j not in cached]
 
-        # Build weights on ACTIVE SET only
+            if len(new_to_cache) > 0:
+                self.beta_ols, self.A_inv, self.XT, self.active_idx = sweep_update_from_D(
+                    beta=self.beta_ols,
+                    A_inv=self.A_inv,
+                    XT=self.XT,
+                    active_idx=self.active_idx,
+                    D=X,
+                    y=y,
+                    new_idx=new_to_cache,
+                    ridge_alpha=self.alpha
+                )
+
         p_active = len(self.active_idx)
+
+        if p_active == 0:
+            return np.zeros(len(pool_lst), dtype=float)
+
+        # Adaptive weights on the cached active set.
+        beta_ols = np.asarray(self.beta_ols).reshape(-1)
+
         if abs(self.gamma) < 1e-10:
             w_hat = np.ones(p_active, dtype=float)
         else:
-            w_hat = 1.0 / np.power(np.abs(self.beta_ols) + self.eps, self.gamma)
+            w_hat = 1.0 / np.power(np.abs(beta_ols) + self.eps, self.gamma)
+
             if np.isfinite(self.w_clp):
                 w_hat = np.clip(w_hat, 1.0 / self.w_clp, self.w_clp)
 
-        # LARS on ACTIVE SET only (clean compute cost)
-        X_active = X[:, self.active_idx]                 # (n, p_active)
-        X_star = X_active / w_hat                        # column scaling
-        _, _, coefs, _ = lars_path(X_star, y.ravel(), return_n_iter=True, max_iter=d, method='lasso')
+        # LARS on the active set only.
+        X_active = X[:, self.active_idx]
+        X_star = X_active / w_hat
+
+        _, _, coefs, _ = lars_path(
+            X_star,
+            y.ravel(),
+            return_n_iter=True,
+            max_iter=d,
+            method='lasso'
+        )
 
         j = min(d, coefs.shape[1] - 1)
-        beta_star = coefs[:, j]                          # (p_active,)
-        beta_active = beta_star / w_hat                  # back-transform
 
-        # Expand to full vector, consistent with basic AdaptiveLASSO
-        beta_full = np.zeros(X.shape[1], dtype=float)
-        beta_full[self.active_idx] = beta_active
-        return beta_full
+        beta_star = coefs[:, j]
+        beta_active = beta_star / w_hat
+
+        # Map active-set coefficients back into pool coordinates.
+        active_to_coef = {
+            int(idx): float(coef)
+            for idx, coef in zip(self.active_idx, beta_active)
+        }
+
+        beta_pool = np.array(
+            [active_to_coef.get(int(idx), 0.0) for idx in pool_lst],
+            dtype=float
+        )
+
+        return beta_pool
 
     def fit(self, X, y, idx_new, idx_old=None, verbose=False):
-        self.mu = float(y.mean()) if self.fit_intercept else 0.0
-        beta_full = self.__call__(X=X, y=y - self.mu, d=self.default_d, idx_old=idx_old, idx_new=idx_new, verbose=verbose)
+        self.reset_cache()
+
+        self.mu = float(np.mean(y)) if self.fit_intercept else 0.0
+
+        beta_pool = self.__call__(
+            X=X,
+            y=y - self.mu,
+            d=self.default_d,
+            idx_old=idx_old,
+            idx_new=idx_new,
+            verbose=verbose
+        )
+
+        valcols = self._valid_cols(X)
+        pool_lst, _ = self._make_pool_order(
+            idx_old=idx_old,
+            idx_new=idx_new,
+            valcols=valcols
+        )
+
+        beta_full = np.zeros(X.shape[1], dtype=float)
+        beta_full[pool_lst] = beta_pool
+
         self.beta = beta_full.reshape(-1, 1)
         return self
 
