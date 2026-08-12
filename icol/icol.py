@@ -1283,18 +1283,18 @@ class BOOTSTRAP:
             return self.X[in_idx], self.X[out_idx], self.y[in_idx], self.y[out_idx]
 
 class ICL_ensemble:
-    def __init__(self, n_estimators, s, so, d, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=None, random_state = None): #, track_intermediates=False):
+    def __init__(self, n_estimators, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=None, random_state = None): #, track_intermediates=False):
         self.n_estimators = n_estimators
         self.s = s
         self.sis = SIS(n_sis=s)
         self.so = so
-        self.d = d
+        self.k = k
         self.fit_intercept = fit_intercept
         self.normalize=normalize
         self.pool_reset = pool_reset
         self.information_criteria = information_criteria if information_criteria in IC_DICT.keys() else None
         self.random_state = random_state
-        self.base = ICL(s=s, so=so, d=d,
+        self.base = ICL(s=s, so=so, k=k,
                          fit_intercept=fit_intercept, normalize=normalize,
                            pool_reset=pool_reset, information_criteria=information_criteria)
     
