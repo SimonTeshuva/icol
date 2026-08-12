@@ -1292,11 +1292,10 @@ class ICL_ensemble:
         self.fit_intercept = fit_intercept
         self.normalize=normalize
         self.pool_reset = pool_reset
-        self.information_criteria = information_criteria if information_criteria in IC_DICT.keys() else None
         self.random_state = random_state
         self.base = ICL(s=s, so=so, k=k,
                          fit_intercept=fit_intercept, normalize=normalize,
-                           pool_reset=pool_reset, information_criteria=information_criteria)
+                           pool_reset=pool_reset)
     
     def get_params(self, deep=False):
         return {
@@ -1307,7 +1306,6 @@ class ICL_ensemble:
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
-                'information_criteria': self.information_criteria,
                 'random_state': self.random_state
         }
     
