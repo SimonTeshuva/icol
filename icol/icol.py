@@ -1283,7 +1283,7 @@ class BOOTSTRAP:
             return self.X[in_idx], self.X[out_idx], self.y[in_idx], self.y[out_idx]
 
 class ICL_ensemble:
-    def __init__(self, n_estimators, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, information_criteria=None, random_state = None): #, track_intermediates=False):
+    def __init__(self, n_estimators, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, random_state = None): #, track_intermediates=False):
         self.n_estimators = n_estimators
         self.s = s
         self.sis = SIS(n_sis=s)
@@ -1302,7 +1302,7 @@ class ICL_ensemble:
                 'n_estimators': self.n_estimators,
                 's': self.s,
                 'so': self.so,
-                'd': self.d,
+                'k': self.k,
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
@@ -1310,10 +1310,10 @@ class ICL_ensemble:
         }
     
     def __str__(self):
-        return 'ICL(s={0}, so={1}, d={2}, fit_intercept={3}, normalize={4}, pool_reset={5}, information_criteria={6}, random_state={7})'.format(self.s, self.so, self.d, self.fit_intercept, self.normalize, self.pool_reset, self.information_criteria, self.random_state)
+        return 'ICL(s={0}, so={1}, d={2}, fit_intercept={3}, normalize={4}, pool_reset={5}, random_state={7})'.format(self.s, self.so, self.k, self.fit_intercept, self.normalize, self.pool_reset, self.random_state)
 
     def __repr__(self):
-        return '\n'.join([self.ensemble_[i].__repr__() for i in range(self.n_estimators)])
+        return '\n\n'.join([self.ensemble_[i].__repr__() for i in range(self.n_estimators)])
                
     def fit(self, X, y, feature_names=None, verbose=False):
         sampler = BOOTSTRAP(X=X, y=y, random_state=self.random_state)
@@ -1336,9 +1336,9 @@ class ICL_ensemble:
     def std(self, X):
         return self.get_rvs(X=X).std(axis=1)
 
-    def predict(self, X, std=False):
+    def predict(self, X, return_std=False):
         rvs = self.get_rvs(X=X)
-        if std:
+        if return_std:
             return rvs.mean(axis=1), rvs.std(axis=1)
         else:
             return rvs.mean(axis=1)
