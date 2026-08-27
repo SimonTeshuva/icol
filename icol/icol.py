@@ -1267,7 +1267,7 @@ class ICL:
         y_hat_ens = self.predict_ensemble(X)
         return np.mean((y_hat_ens - y.reshape(-1,1))**2, axis=0)
 
-class BOOTSTRAP:
+class BOOTSTRAP_OLD:
     def __init__(self, X, y=None, random_state=None):
         self.X = X
         self.y = y
@@ -1282,8 +1282,52 @@ class BOOTSTRAP:
         else:
             return self.X[in_idx], self.X[out_idx], self.y[in_idx], self.y[out_idx]
 
+class BOOTSTRAP:
+    def __init__(self, X, y=None, random_state=None, method="standard"):
+        self.X = X
+        self.y = y
+        self.method = method
+        self.rng = np.random.default_rng(random_state)
+
+    def sample(self, n, ret_idx=False):
+        N = self.X.shape[0]
+
+        if self.method == "standard":
+            in_idx = self.rng.integers(0, N, size=n)
+
+        elif self.method == "bayesian":
+            weights = self.rng.dirichlet(np.ones(N))
+            in_idx = self.rng.choice(N, size=n, replace=True, p=weights)
+
+        elif self.method == "perturbation":
+            weights = self.rng.exponential(size=N)
+            weights /= weights.sum()
+            in_idx = self.rng.choice(N, size=n, replace=True, p=weights)
+
+        else:
+            raise ValueError(
+                "method must be 'standard', 'bayesian', or 'perturbation'"
+            )
+
+        out_idx = np.setdiff1d(np.arange(N), np.unique(in_idx))
+
+        if ret_idx:
+            return in_idx, out_idx
+
+        if self.y is None:
+            return self.X[in_idx], self.X[out_idx]
+
+        return (
+            self.X[in_idx],
+            self.X[out_idx],
+            self.y[in_idx],
+            self.y[out_idx],
+        )
+
 class ICL_ensemble:
-    def __init__(self, n_estimators, s, so, k, fit_intercept=True, normalize=True, pool_reset=False, random_state = None): #, track_intermediates=False):
+    def __init__(self, n_estimators, s, so, k, fit_intercept=True,
+                  normalize=True, pool_reset=False, random_state = None,
+                  bootstrap = 'bayesian'): #, track_intermediates=False):
         self.n_estimators = n_estimators
         self.s = s
         self.sis = SIS(n_sis=s)
@@ -1293,6 +1337,7 @@ class ICL_ensemble:
         self.normalize=normalize
         self.pool_reset = pool_reset
         self.random_state = random_state
+        self.bootstrap = bootstrap
         self.base = ICL(s=s, so=so, k=k,
                          fit_intercept=fit_intercept, normalize=normalize,
                            pool_reset=pool_reset)
@@ -1306,17 +1351,20 @@ class ICL_ensemble:
                 'fit_intercept': self.fit_intercept,
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
-                'random_state': self.random_state
+                'random_state': self.random_state,
+                'bootstrap': self.bootstrap
         }
     
     def __str__(self):
-        return 'ICL(s={0}, so={1}, d={2}, fit_intercept={3}, normalize={4}, pool_reset={5}, random_state={7})'.format(self.s, self.so, self.k, self.fit_intercept, self.normalize, self.pool_reset, self.random_state)
+        return 'ICL(s={0}, so={1}, d={2}, fit_intercept={3}, ' \
+        'normalize={4}, pool_reset={5}, random_state={7})' \
+        'bootstrap={6}'.format(self.s, self.so, self.k, self.fit_intercept, self.normalize, self.pool_reset, self.bootstrap, self.random_state)
 
     def __repr__(self):
         return '\n\n'.join([self.ensemble_[i].__repr__() for i in range(self.n_estimators)])
                
     def fit(self, X, y, feature_names=None, verbose=False):
-        sampler = BOOTSTRAP(X=X, y=y, random_state=self.random_state)
+        sampler = BOOTSTRAP(X=X, y=y, random_state=self.random_state, method= self.bootstrap)
         self.ensemble_ = np.empty(shape=self.n_estimators, dtype=object)
         for i in range(self.n_estimators):
             if verbose: print('fitting model {0}'.format(i+1))
