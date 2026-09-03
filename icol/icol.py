@@ -1327,7 +1327,7 @@ class BOOTSTRAP:
 class ICL_ensemble:
     def __init__(self, n_estimators, s, so, k, fit_intercept=True,
                   normalize=True, pool_reset=False, random_state = None,
-                  bootstrap = 'bayesian'): #, track_intermediates=False):
+                  bootstrap = 'bayesian', optimize_k=False): #, track_intermediates=False):
         self.n_estimators = n_estimators
         self.s = s
         self.sis = SIS(n_sis=s)
@@ -1338,9 +1338,10 @@ class ICL_ensemble:
         self.pool_reset = pool_reset
         self.random_state = random_state
         self.bootstrap = bootstrap
-        self.base = ICL(s=s, so=so, k=k,
-                         fit_intercept=fit_intercept, normalize=normalize,
-                           pool_reset=pool_reset)
+        self.optimize_k=optimize_k
+        self.base = ICL(s=self.s, so=self.so, k=self.k,
+                         fit_intercept=self.fit_intercept, normalize=self.normalize,
+                           pool_reset=self.pool_reset, optimize_k=self.optimize_k)
     
     def get_params(self, deep=False):
         return {
@@ -1352,13 +1353,14 @@ class ICL_ensemble:
                 'normalize': self.normalize,
                 'pool_reset': self.pool_reset,
                 'random_state': self.random_state,
-                'bootstrap': self.bootstrap
+                'bootstrap': self.bootstrap,
+                'optimize_k': self.optimize_k
         }
     
     def __str__(self):
         return 'ICL(s={0}, so={1}, d={2}, fit_intercept={3}, ' \
         'normalize={4}, pool_reset={5}, random_state={7})' \
-        'bootstrap={6}'.format(self.s, self.so, self.k, self.fit_intercept, self.normalize, self.pool_reset, self.bootstrap, self.random_state)
+        'bootstrap={6}, optimize_k={8}'.format(self.s, self.so, self.k, self.fit_intercept, self.normalize, self.pool_reset, self.bootstrap, self.random_state, self.optimize_k)
 
     def __repr__(self):
         return '\n\n'.join([self.ensemble_[i].__repr__() for i in range(self.n_estimators)])
