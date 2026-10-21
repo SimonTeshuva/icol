@@ -1100,7 +1100,7 @@ class ICL:
 
         pool_ = set()
         if track_pool: self.pool = []
-        if self.optimize_k or self.track_intermediates: self.intermediates = np.empty(shape=(self.k, 5), dtype=object)
+        if self.optimize_k or self.track_intermediates: self.intermediates = np.empty(shape=(self.k, 6), dtype=object)
 
         res = y
         i = 0
@@ -1158,6 +1158,8 @@ class ICL:
                 self.intermediates[i, 2] = intercept_ if self.fit_intercept else 0
                 self.intermediates[i, 3] = self.feature_names_[idx]
                 self.intermediates[i, 4] = expr
+                self.intermediates[i, 5] = deepcopy(pool_lst)
+
 
             if self.pool_reset:
                 idx = np.abs(beta_i) > 0 
