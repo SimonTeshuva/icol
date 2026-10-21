@@ -1171,7 +1171,7 @@ class ICL:
             res = (y.reshape(1, -1) - (np.dot(X, beta).reshape(1, -1)+self.intercept_) ).T
 
             i += 1
-        if self.optimize_k or self.track_intermediates: self.intermediates = self.intermediates[:, :i]
+        if self.optimize_k or self.track_intermediates: self.intermediates = self.intermediates[:i, :]
             
         if verbose: print()
         
